@@ -31,7 +31,10 @@ This project follows Keep a Changelog and uses Semantic Versioning.
   syscall wrapper instead of spawning `id -u`, removing a `PATH`-resolved subprocess from the
   security gate of a scheduler-invoked process.
 
-## [1.0.0] - 2026-06-08
+## [1.0.0] - unreleased
+
+The complete first-release feature set. Code is finished but not yet tagged or published to
+crates.io; this section gets its release date when `v1.0.0` is cut.
 
 ### Added
 
