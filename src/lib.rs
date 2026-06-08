@@ -13,11 +13,13 @@ pub mod context;
 pub mod error;
 pub mod lifecycle;
 pub mod model;
+mod platform;
 pub mod store;
 pub mod time;
 
-use context::{Context, UnavailableNotifier, UnavailableScheduler};
+use context::Context;
 use error::Result;
+use platform::{NativeNotifier, NativeScheduler};
 use store::Store;
 use time::SystemClock;
 
@@ -37,8 +39,8 @@ where
     let context = Context::new(
         runtime_store()?,
         SystemClock,
-        UnavailableScheduler,
-        UnavailableNotifier,
+        NativeScheduler::new()?,
+        NativeNotifier,
     );
     run_with_context(cli, &mut out, &context)?;
     Ok(())

@@ -34,3 +34,6 @@ test-fakes = []
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage,coverage_nightly)'] }
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+notify-rust = { version = "4", default-features = false, features = ["d_vendored"] }

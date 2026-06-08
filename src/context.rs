@@ -60,6 +60,13 @@ where
 }
 
 pub trait Scheduler {
+    /// Prepares the native scheduler for a reconcile pass.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when scheduler prerequisites cannot be applied.
+    fn prepare(&self) -> Result<(), SchedulerError>;
+
     /// Creates or replaces one owned backend trigger.
     ///
     /// # Errors
@@ -73,9 +80,23 @@ pub trait Scheduler {
     ///
     /// Returns an error when the native scheduler cannot remove the trigger.
     fn remove(&self, backend_id: &str) -> Result<(), SchedulerError>;
+
+    /// Lists live backend trigger identities in ccplan's namespace.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the native scheduler cannot be queried.
+    fn list(&self) -> Result<Vec<String>, SchedulerError>;
 }
 
 pub trait Notifier {
+    /// Checks whether desktop notifications appear usable in this process.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the platform notification backend is likely unavailable.
+    fn check(&self) -> Result<(), NotifyError>;
+
     /// Sends one desktop notification.
     ///
     /// # Errors
@@ -111,6 +132,11 @@ pub struct UnavailableScheduler;
 
 impl Scheduler for UnavailableScheduler {
     #[cfg_attr(coverage_nightly, coverage(off))]
+    fn prepare(&self) -> Result<(), SchedulerError> {
+        Err(SchedulerError::Unavailable)
+    }
+
+    #[cfg_attr(coverage_nightly, coverage(off))]
     fn add(&self, _trigger: &TriggerRecord) -> Result<(), SchedulerError> {
         Err(SchedulerError::Unavailable)
     }
@@ -119,12 +145,22 @@ impl Scheduler for UnavailableScheduler {
     fn remove(&self, _backend_id: &str) -> Result<(), SchedulerError> {
         Err(SchedulerError::Unavailable)
     }
+
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    fn list(&self) -> Result<Vec<String>, SchedulerError> {
+        Err(SchedulerError::Unavailable)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct UnavailableNotifier;
 
 impl Notifier for UnavailableNotifier {
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    fn check(&self) -> Result<(), NotifyError> {
+        Err(NotifyError::Unavailable)
+    }
+
     #[cfg_attr(coverage_nightly, coverage(off))]
     fn notify(&self, _notification: &Notification) -> Result<(), NotifyError> {
         Err(NotifyError::Unavailable)
@@ -164,6 +200,10 @@ impl RecordingScheduler {
 
 #[cfg(any(test, feature = "test-fakes"))]
 impl Scheduler for RecordingScheduler {
+    fn prepare(&self) -> Result<(), SchedulerError> {
+        Ok(())
+    }
+
     fn add(&self, trigger: &TriggerRecord) -> Result<(), SchedulerError> {
         self.calls
             .borrow_mut()
@@ -180,6 +220,10 @@ impl Scheduler for RecordingScheduler {
             .push(SchedulerCall::Remove(backend_id.to_owned()));
         self.triggers.borrow_mut().remove(backend_id);
         Ok(())
+    }
+
+    fn list(&self) -> Result<Vec<String>, SchedulerError> {
+        Ok(self.triggers.borrow().keys().cloned().collect())
     }
 }
 
@@ -199,6 +243,10 @@ impl RecordingNotifier {
 
 #[cfg(any(test, feature = "test-fakes"))]
 impl Notifier for RecordingNotifier {
+    fn check(&self) -> Result<(), NotifyError> {
+        Ok(())
+    }
+
     fn notify(&self, notification: &Notification) -> Result<(), NotifyError> {
         self.notifications.borrow_mut().push(notification.clone());
         Ok(())

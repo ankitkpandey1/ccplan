@@ -46,7 +46,7 @@ pub fn dispatch(
         Some(Commands::Apply(args)) => apply(args, out, context),
         Some(Commands::Fire(args)) => fire(&args, context),
         Some(Commands::Status) => status(out, context),
-        Some(Commands::Doctor) => doctor(out),
+        Some(Commands::Doctor) => doctor(out, context),
         Some(Commands::Completions(args)) => completions(args.shell, out),
     }
 }
@@ -252,11 +252,18 @@ fn apply(args: ApplyArgs, out: &mut dyn Write, context: &ContextRefs<'_>) -> Res
     let desired = desired_triggers(&plan, context.clock.now().timestamp())?;
     let store = context.store;
     let scheduler = context.scheduler;
+    if !args.dry_run {
+        scheduler.prepare()?;
+        if let Err(error) = context.notifier.check() {
+            writeln!(out, "warning: notifier: {error}")?;
+        }
+    }
     let changes = reconcile_triggers(store, scheduler, &date, &desired, args.dry_run)?;
     write_reconcile_summary(out, &changes)
 }
 
 fn fire(args: &FireArgs, context: &ContextRefs<'_>) -> Result<()> {
+    let _cleanup = FireCleanup;
     let Some(mut plan) = context.store.load_plan(&args.date)? else {
         return Ok(());
     };
@@ -301,15 +308,26 @@ fn fire(args: &FireArgs, context: &ContextRefs<'_>) -> Result<()> {
     Ok(())
 }
 
+struct FireCleanup;
+
+impl Drop for FireCleanup {
+    fn drop(&mut self) {
+        crate::platform::cleanup_after_fire();
+    }
+}
+
 fn status(out: &mut dyn Write, context: &ContextRefs<'_>) -> Result<()> {
     let triggers = context.store.list_triggers()?;
     writeln!(out, "triggers: {}", triggers.len())?;
+    match context.scheduler.list() {
+        Ok(live) => writeln!(out, "live triggers: {}", live.len())?,
+        Err(error) => writeln!(out, "live triggers: unavailable ({error})")?,
+    }
     Ok(())
 }
 
-fn doctor(out: &mut dyn Write) -> Result<()> {
-    writeln!(out, "scheduler: unavailable until Stage 5")?;
-    writeln!(out, "notifier: unavailable until Stage 5")?;
+fn doctor(out: &mut dyn Write, context: &ContextRefs<'_>) -> Result<()> {
+    crate::platform::write_doctor(out, context)?;
     Ok(())
 }
 
@@ -490,16 +508,44 @@ where
     Ok(())
 }
 
-fn notify(context: &ContextRefs<'_>, block: &Block) {
-    let _ = context.notifier.notify(&Notification {
-        title: block.title.clone(),
-        body: format!("{} at {}", block.id, block.start),
-    });
+fn send_notification(context: &ContextRefs<'_>, block: &Block) -> std::result::Result<(), String> {
+    let notification = notification_for(block);
+    context
+        .notifier
+        .notify(&notification)
+        .map_err(|error| error.to_string())
+}
+
+fn log_notification_result(
+    result: std::result::Result<(), String>,
+    success_label: &str,
+    log_line: &mut String,
+) {
+    match result {
+        Ok(()) => log_line.push_str(success_label),
+        Err(error) => {
+            log_line.push_str(" notify-failed=");
+            log_line.push_str(&sanitize_log_field(&error));
+        }
+    }
+}
+
+fn sanitize_log_field(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| if ch.is_whitespace() { '_' } else { ch })
+        .collect()
 }
 
 fn log_notify(context: &ContextRefs<'_>, block: &Block, log_line: &mut String) {
-    notify(context, block);
-    log_line.push_str(" notified");
+    log_notification_result(send_notification(context, block), " notified", log_line);
+}
+
+fn notification_for(block: &Block) -> Notification {
+    Notification {
+        title: block.title.clone(),
+        body: format!("{} at {}", block.id, block.start),
+    }
 }
 
 fn activate_block(
@@ -512,7 +558,11 @@ fn activate_block(
 ) -> Result<()> {
     plan.blocks[index].status = Status::Active;
     if do_notify {
-        notify(context, &plan.blocks[index]);
+        log_notification_result(
+            send_notification(context, &plan.blocks[index]),
+            "",
+            log_line,
+        );
     }
     if run {
         log_line.push_str(" activated run-deferred");
@@ -642,12 +692,12 @@ fn backend_id_for(
     id: &BlockId,
     event: Event,
     rev: &crate::model::ScheduleRev,
-    scheduled_at: Timestamp,
+    _scheduled_at: Timestamp,
 ) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(id.as_str().as_bytes());
     let id_hash = hasher.finalize().to_hex()[..10].to_owned();
-    format!("{date}-{id_hash}-{rev}-{event}-{scheduled_at}")
+    format!("{date}-{id_hash}-{rev}-{event}")
 }
 
 fn format_end(block: &Block) -> String {

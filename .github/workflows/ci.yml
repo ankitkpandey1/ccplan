@@ -41,6 +41,16 @@ jobs:
       - name: Check MSRV
         run: cargo check --all-features --workspace
 
+  native-integration:
+    name: native integration (linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run ignored native scheduler tests
+        run: cargo test --test integration_linux -- --ignored --nocapture
+
   coverage:
     name: coverage
     runs-on: ubuntu-latest

@@ -1,14 +1,17 @@
 use assert_fs::TempDir;
 use ccplan::{
     cli::Cli,
-    context::{Context, RecordingNotifier, RecordingScheduler, SchedulerCall},
+    context::{
+        Context, Notification, Notifier, NotifyError, RecordingNotifier, RecordingScheduler,
+        Scheduler, SchedulerCall, SchedulerError,
+    },
     error::Error,
     model::{
         Block, BlockId, ClockTime, DurationSpec, Lead, Plan, PlanDate, Run, Span, Status,
         TimeZoneName,
     },
     run_with_context,
-    store::{HistoryPolicy, Store},
+    store::{HistoryPolicy, Store, TriggerRecord},
     time::FixedClock,
 };
 use clap::Parser;
@@ -752,6 +755,30 @@ fn fire_start_records_ledger_notifies_updates_status_and_deduplicates() {
 }
 
 #[test]
+fn notification_failures_warn_on_apply_and_are_logged_on_fire() {
+    let (_temp, context) = failing_notifier_context_at("2026-06-08T10:00:00+05:30[Asia/Kolkata]");
+    context
+        .store
+        .set_plan(&plan(), HistoryPolicy::Preserve)
+        .unwrap();
+
+    let apply = String::from_utf8(run_ok(&context, ["ccplan", "apply"])).unwrap();
+    assert!(apply.contains("warning: notifier: notification failed: no desktop bus"));
+
+    let rev = focus_rev(&context);
+    run_ok(
+        &context,
+        fire_args("focus", "notify", rev.as_str(), "2026-06-08T05:25:00Z"),
+    );
+
+    assert!(
+        std::fs::read_to_string(context.store.fire_log_path())
+            .unwrap()
+            .contains("notify-failed=notification_failed:_send_failed")
+    );
+}
+
+#[test]
 fn stale_fire_noops_without_recording_a_notification() {
     let (_temp, context) = test_context_at("2026-06-08T11:00:00+05:30[Asia/Kolkata]");
     context
@@ -801,6 +828,16 @@ fn status_doctor_and_completions_are_non_interactive() {
             .unwrap()
             .contains("Stage 7")
     );
+}
+
+#[test]
+fn status_reports_scheduler_list_failures_without_failing() {
+    let (_temp, context) =
+        list_failing_scheduler_context_at("2026-06-08T10:00:00+05:30[Asia/Kolkata]");
+
+    let output = String::from_utf8(run_ok(&context, ["ccplan", "status"])).unwrap();
+
+    assert!(output.contains("live triggers: unavailable"));
 }
 
 fn run_ok<C, S, N, I, T>(context: &Context<C, S, N>, args: I) -> Vec<u8>
@@ -867,6 +904,71 @@ fn test_context_at(
         RecordingNotifier::default(),
     );
     (temp, context)
+}
+
+fn failing_notifier_context_at(
+    now: &str,
+) -> (
+    TempDir,
+    Context<FixedClock, RecordingScheduler, FailingNotifier>,
+) {
+    let temp = TempDir::new().unwrap();
+    let store = Store::new(temp.path());
+    let clock = FixedClock::new(now.parse::<Zoned>().unwrap());
+    let context = Context::new(store, clock, RecordingScheduler::default(), FailingNotifier);
+    (temp, context)
+}
+
+fn list_failing_scheduler_context_at(
+    now: &str,
+) -> (
+    TempDir,
+    Context<FixedClock, ListFailingScheduler, RecordingNotifier>,
+) {
+    let temp = TempDir::new().unwrap();
+    let store = Store::new(temp.path());
+    let clock = FixedClock::new(now.parse::<Zoned>().unwrap());
+    let context = Context::new(
+        store,
+        clock,
+        ListFailingScheduler,
+        RecordingNotifier::default(),
+    );
+    (temp, context)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FailingNotifier;
+
+impl Notifier for FailingNotifier {
+    fn check(&self) -> Result<(), NotifyError> {
+        Err(NotifyError::Operation("no desktop bus".to_owned()))
+    }
+
+    fn notify(&self, _notification: &Notification) -> Result<(), NotifyError> {
+        Err(NotifyError::Operation("send failed".to_owned()))
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ListFailingScheduler;
+
+impl Scheduler for ListFailingScheduler {
+    fn prepare(&self) -> Result<(), SchedulerError> {
+        Ok(())
+    }
+
+    fn add(&self, _trigger: &TriggerRecord) -> Result<(), SchedulerError> {
+        Ok(())
+    }
+
+    fn remove(&self, _backend_id: &str) -> Result<(), SchedulerError> {
+        Ok(())
+    }
+
+    fn list(&self) -> Result<Vec<String>, SchedulerError> {
+        Err(SchedulerError::Operation("list failed".to_owned()))
+    }
 }
 
 fn plan_toml() -> &'static str {
