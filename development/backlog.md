@@ -21,7 +21,10 @@
 
 | ID | Found in stage | Priority | Description / action | Target |
 |----|:--------------:|:--------:|----------------------|--------|
-| _(none)_ | | | | |
+| B-002 | 5 | P2 | Add explicit macOS/Windows dependency-policy coverage once CI can run target-aware `cargo deny` without penalizing inactive Linux-only dependencies. Current Stage 5 deny gate is scoped to `x86_64-unknown-linux-gnu`, matching the Ubuntu CI job. | Stage 8 / CI hardening |
+| B-003 | 5 | P2 | Verify the macOS LaunchAgent path and Windows Task Scheduler XML on real interactive OS sessions, including notification delivery from scheduled `fire` and Windows `ccplan-fire.exe` no-console behavior. | Before v1.0.0 ship gate |
+| B-004 | 5 | P3 | Decide whether manual `ccplan fire` without scheduler-injected D-Bus env should be supported on Linux. If yes, implement notification sending with an explicit bus address instead of mutating process env, because Rust 2024 makes `std::env::set_var` unsafe. | Post-Stage 6 polish |
+| B-005 | 5 | P2 | Ensure Stage 8 packaging/release tooling includes both `ccplan` and the Windows `ccplan-fire` wrapper where needed. | Stage 8 release packaging |
 
 ## Resolved
 

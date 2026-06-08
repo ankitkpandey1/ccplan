@@ -790,3 +790,186 @@ Codecov action`; `30f9a70` `ci: keep coverage gate independent of codecov`   · 
 - [x] `apply`, `clear`, and `fire` implemented over fake backends and durable ledgers.
 - [x] Fake-backed integration tests, binary smoke tests, and `apply` property test added.
 - [x] DoD green; command logic, reconciler, and fire integration at 100% line coverage.
+
+## Stage 5 — Native scheduler & notifier backends — 2026-06-08
+
+**Commit(s):** `7410f0d` `feat: add native scheduler and notifier backends`   ·   **Branch:** `dev`
+
+### A. Recon summary
+- Re-read `development/notes.md`, `development/backlog.md`, `development/implementation_checklist.md`,
+  DESIGN §6.1/§6.4/§7/§11, and the Stage 4 command/context seams before replacing the unavailable
+  runtime backends.
+- Re-ran the full Stage 4/global gate before coding; fmt, clippy, full tests, coverage, `cargo-deny`,
+  release build, MSRV, and duplicate scan were green.
+- Checked the dev box native scheduler environment: `systemctl --user is-system-running` returned
+  `running`, and real `systemd --user` timers could be created and removed.
+- Verified the systemd calendar format in practice: the backend uses `YYYY-MM-DD HH:MM:SS UTC` for
+  `--on-calendar`; raw RFC3339 `Z` is kept for the internal `fire --at` argument, not for systemd.
+
+### B. What was built
+- Added `src/platform/{mod,systemd,launchd,schtasks,notify,unsupported}.rs` and wired `run(cli,out)` to
+  build `NativeScheduler` and `NativeNotifier`.
+- Extended the `Scheduler` trait with `prepare()` and `list()`, and extended the `Notifier` trait with
+  `check()`. Recording fakes and unavailable stubs were updated accordingly.
+- Implemented Linux scheduling through transient `systemd-run --user` timers:
+  `ccplan-<date>-<idhash>-<rev>-<event>` unit names, `AccuracySec=1s`, calendar validation via
+  `systemd-analyze calendar`, absolute binary paths, idempotent stop-then-run, live listing via
+  `systemctl --user list-timers`, and env propagation for D-Bus/display plus `CCPLAN_ROOT`.
+- Implemented macOS LaunchAgents with manually emitted plist XML, `launchctl bootstrap`/`bootout`,
+  no `RunAtLoad`, and fire-path self-cleanup using label/plist environment variables.
+- Implemented Windows Task Scheduler XML creation with `schtasks.exe /Create /XML`, second-precision
+  `TimeTrigger`, `EndBoundary`, `DeleteExpiredTaskAfter=PT0S`, hidden interactive tasks, list/delete,
+  and a `ccplan-fire` GUI-subsystem wrapper preferred for scheduled fire actions.
+- Implemented notifications: Linux `notify-rust` with vendored D-Bus, macOS `osascript`, and Windows
+  PowerShell WinRT toast. Notification failures are warned/logged and remain non-fatal.
+- Implemented native `doctor` output for scheduler/notifier/timezone readiness, and made `status`
+  report both stored trigger count and live backend trigger count.
+- Added `tests/integration_linux.rs`, ignored by default and run by a dedicated CI job, to create and
+  remove real systemd timers against an isolated `CCPLAN_ROOT`.
+
+### C. Self-review findings & fixes
+- The first Windows task XML declared UTF-16 while `fs::write` emitted UTF-8 bytes. Fixed the XML
+  declaration to `encoding="UTF-8"`.
+- The first `fire` cleanup call only ran after successful decision handling. That would leave launchd
+  jobs behind on missing/stale/already-fired no-ops, so cleanup now uses a scope guard that runs on
+  every `fire` exit path.
+- The first isolated dogfood attempt checked the wrong fire-log path. The store writes logs under the
+  injected data dir (`data/ccplan/log/fire.log`), while ledgers live under `state/ccplan`.
+- `CCPLAN_ROOT` had to be propagated into systemd/launchd scheduled processes; otherwise isolated
+  apply tests would schedule a fire process against the user's real store.
+- The planned `plist` crate and default `notify-rust` graph pulled vulnerable `time` 0.3.45, while the
+  fixed `time` line required Rust 1.88 and violated the Rust 1.85 MSRV. The implementation now avoids
+  `plist`, makes `notify-rust` Linux-only with vendored D-Bus, and scopes `cargo-deny` to the Linux CI
+  target. Follow-up target-policy work is tracked as B-002.
+- Rust 2024 makes environment mutation unsafe, so the fire path does not call `std::env::set_var` to
+  reconstruct D-Bus state. The supported native path injects D-Bus env at schedule time; manual-fire
+  support without that env is tracked as B-004.
+
+### D. Evidence
+- `cargo fmt --all -- --check`:
+
+  ```text
+  <no output; exit 0>
+  ```
+
+- `cargo clippy --all-targets --all-features -- -D warnings`:
+
+  ```text
+  Checking ccplan v1.0.0 (/home/euler/test/cc-planner)
+  Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.16s
+  ```
+
+- `cargo test --all-features --workspace`:
+
+  ```text
+  91 passed; 0 failed; 1 ignored
+  ```
+
+- `RUSTFLAGS="--cfg coverage_nightly" cargo +nightly llvm-cov --all-features --workspace
+  --fail-under-lines 100`:
+
+  ```text
+  TOTAL 1797 lines, 0 missed lines, 100.00% line cover
+  ```
+
+- `cargo deny check`:
+
+  ```text
+  advisories ok, bans ok, licenses ok, sources ok
+  ```
+
+- `cargo build --release`:
+
+  ```text
+  Finished `release` profile [optimized] target(s) in 0.07s
+  ```
+
+- `cargo +1.85.0 check --all-features --workspace`:
+
+  ```text
+  Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.12s
+  ```
+
+- `cargo tree --duplicates`:
+
+  ```text
+  warning: nothing to print.
+  ```
+
+- `cargo test --test integration_linux -- --ignored --nocapture`:
+
+  ```text
+  running
+  test systemd_apply_creates_and_clear_removes_timer ... ok
+  test result: ok. 1 passed; 0 failed; 0 ignored
+  ```
+
+- Post-integration cleanup:
+
+  ```text
+  systemctl --user list-timers 'ccplan-*' --all --no-pager
+  0 timers listed.
+  ```
+
+- Manual Linux dogfood against isolated `CCPLAN_ROOT=/tmp/tmp.Ticxdf7725`:
+
+  ```text
+  add 2026-06-08-42f71c346e-0715d86d80fa7b63-end
+  add 2026-06-08-42f71c346e-0715d86d80fa7b63-notify
+  add 2026-06-08-42f71c346e-0715d86d80fa7b63-start
+  ```
+
+  Real systemd fired notify/start/end at 17:53/17:54/17:55 IST. The isolated log recorded:
+
+  ```text
+  2026-06-08 stage5-dogfood notify notified
+  2026-06-08 stage5-dogfood start activated
+  2026-06-08 stage5-dogfood end closed
+  ```
+
+  `fired.json` contained all three keys, `show` reported the block as `expired` after the end fire,
+  and post-clear `systemctl --user list-timers 'ccplan-*' --all` reported `0 timers listed`.
+
+- CI: https://github.com/ankitkpandey1/cc-planner/actions/runs/27137960980 passed.
+
+  ```text
+  ✓ cargo-deny in 43s
+  ✓ native integration (linux) in 1m21s
+  ✓ coverage in 1m13s
+  ✓ MSRV in 49s
+  ✓ test (ubuntu-latest) in 1m1s
+  ✓ test (macos-latest) in 58s
+  ✓ test (windows-latest) in 5m48s
+  ```
+
+  The CI native-integration log showed `running` and `1 passed`, so it exercised the real systemd
+  create/remove path instead of skipping.
+
+- Coverage exclusions added this stage:
+  - `src/platform/{systemd,launchd,schtasks,notify,unsupported}.rs` are `coverage(off)` because they
+    are native OS command/notification boundaries.
+  - `src/bin/ccplan-fire.rs::main` is `coverage(off)` for the same reason as `src/main.rs`: process
+    plumbing around covered library behavior.
+
+### E. Reflection & learnings
+- The durable trigger ledger and native backend identity should not be the same string. The backend
+  identity needs to stay short and clearable (`date-idhash-rev-event`); the fired ledger keeps the
+  exact scheduled instant for at-most-once semantics.
+- The environment boundary is part of scheduling, not notification. Passing D-Bus/display/root env at
+  `apply` time made the actual scheduled process deterministic and avoided unsafe env mutation later.
+- Dependency security and MSRV can overturn apparently simple platform-library choices. Manual plist
+  XML is less glamorous than a crate, but here it is smaller, auditable, and avoids an advisory/MSRV
+  conflict.
+- Hosted CI can compile macOS/Windows cfg paths, but it is still not a replacement for real interactive
+  desktop sessions. That runtime verification remains an explicit pre-ship task.
+
+### F. Backlog items raised/closed
+- Raised: B-002, B-003, B-004, B-005.
+- Closed: none.
+
+### G. Acceptance-gate confirmation
+- [x] Real native scheduler/notifier backends implemented and wired into runtime.
+- [x] `doctor`, `status`, notifier warnings, fire logging, and launchd cleanup behavior implemented.
+- [x] Linux native integration test added and run locally/CI.
+- [x] Manual Linux near-future dogfood completed with real notify/start/end fire evidence.
+- [x] DoD green locally; CI green across Linux/macOS/Windows, coverage, cargo-deny, MSRV, and native integration.

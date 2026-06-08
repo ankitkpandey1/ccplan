@@ -479,32 +479,37 @@ traits, plus `doctor`. These are the only modules excluded from coverage.
 **Preconditions:** Stage 4 gate green.
 
 **Steps:**
-- [ ] `src/platform/mod.rs` selects the backend by `#[cfg(target_os=…)]`. Each backend module is
+- [x] `src/platform/mod.rs` selects the backend by `#[cfg(target_os=…)]`. Each backend module is
       `#[cfg_attr(coverage_nightly, coverage(off))]` with a justifying comment.
-- [ ] **Linux** (`platform/systemd.rs`): shell out to `systemd-run --user` exactly per notes §3
-      (unit name `ccplan-<date>-<idhash>-<rev>-<event>` — full trigger identity, `--on-calendar`, `AccuracySec=1s`, `--setenv` for
-      `DBUS_SESSION_BUS_ADDRESS`/`DISPLAY`; absolute binary path; `systemd-analyze calendar` validation;
+- [x] **Linux** (`platform/systemd.rs`): shell out to `systemd-run --user` exactly per notes §3
+      (unit name `ccplan-<date>-<idhash>-<rev>-<event>` — full trigger identity, UTC `--on-calendar`,
+      `AccuracySec=1s`, `--setenv` for `DBUS_SESSION_BUS_ADDRESS`/`DISPLAY`/`WAYLAND_DISPLAY`/
+      `XAUTHORITY`/`CCPLAN_ROOT`; absolute binary path; `systemd-analyze calendar` validation;
       list via `systemctl --user list-timers 'ccplan-*'`; cancel via `stop`; idempotent stop-then-run).
-- [ ] **macOS** (`platform/launchd.rs`): author plist via `plist` crate, `launchctl bootstrap`/
-      `bootout`; one-shot self-destruct in the `fire` path (bootout own label + delete plist). No `RunAtLoad`.
-- [ ] **Windows** (`platform/schtasks.rs`): shell out to `schtasks.exe /Create /XML <tmpfile>` with a
+- [x] **macOS** (`platform/launchd.rs`): author plist XML manually, `launchctl bootstrap`/
+      `bootout`; one-shot self-destruct in the `fire` path (bootout own label + delete plist). No
+      `RunAtLoad`. Security/MSRV deviation: the planned `plist` crate was not added because its
+      transitive `time` graph hit RUSTSEC-2026-0009 while the fixed line required Rust 1.88.
+- [x] **Windows** (`platform/schtasks.rs`): shell out to `schtasks.exe /Create /XML <tmpfile>` with a
       TimeTrigger (`StartBoundary`, second precision) under the `\ccplan\` task folder; `EndBoundary` +
       `DeleteExpiredTaskAfter=PT0S` for auto-cleanup; `<Hidden>` + a `windows_subsystem = "windows"`
       fire shim so no console flashes; list/delete via `schtasks /Query|/Delete`. No `planif`/COM, no
       `unsafe` (notes §3, D16).
-- [ ] **Notifier** (`platform/notify.rs`): `notify-rust` title+body; failure logged + non-fatal.
-- [ ] `doctor`: detect the native scheduler (is `systemd --user` up? `launchctl` domain? Task
+- [x] **Notifier** (`platform/notify.rs`): Linux `notify-rust` title+body; macOS `osascript`; Windows
+      PowerShell WinRT toast. Failure logged + non-fatal.
+- [x] `doctor`: detect the native scheduler (is `systemd --user` up? `launchctl` domain? Task
       Scheduler reachable?) + notifier capability + timezone, and print actionable fixes. Notification
       capability unavailable ⇒ loud warning (never silent). `doctor` logic that's testable (parsing/
       formatting) is unit-tested; the probes themselves are in the `#[coverage(off)]` backend.
-- [ ] **Integration tests** (`tests/integration_*.rs`, `#[ignore]` by default, run per-OS in CI with a
-      dedicated job or `--features integration`): on Linux, actually `apply` a near-future block, assert
-      a `ccplan-*` timer exists, then `clear` removes it. Keep minimal; document flakiness in notes.
+- [x] **Integration tests** (`tests/integration_*.rs`, `#[ignore]` by default, run per-OS in CI with a
+      dedicated job or `--features integration`): on Linux, `apply` a far-future block, assert a
+      `ccplan-*` timer exists, then `clear` removes it. Manual dogfood covers a near-future notify/
+      start/end fire. macOS/Windows real-session verification is tracked in B-003.
 
 **Acceptance Gate:**
-- [ ] DoD green (coverage still 100% because backends are `coverage(off)`; verify the exclusions are
-      ONLY the listed ones). CI matrix green on all three OSes. Manually dogfood on the Linux dev box:
-      `apply` a block 1 minute out and confirm a real desktop notification fires. Audit + notes updated.
+- [x] DoD green (coverage still 100% because backends are `coverage(off)`; verify the exclusions are
+      ONLY the listed ones). Local Linux native integration and near-future dogfood green. CI matrix
+      verification is recorded in the Stage 5 audit entry. Audit + notes updated.
 
 **Commit:** `feat: native systemd/launchd/Task-Scheduler backends, notifier, and doctor`
 

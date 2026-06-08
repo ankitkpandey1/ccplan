@@ -66,17 +66,17 @@ serde_json    = "1"
 jiff          = { version = "0.2", features = ["serde"] }
 directories   = "6"
 blake3        = "1"
-notify-rust   = "4"
 fs2           = "0.4"
 thiserror     = "2"             # library error enum (CONVENTIONS §4); required, do not omit
 anyhow        = "1"             # main/CLI boundary only
 
-[target.'cfg(target_os = "macos")'.dependencies]
-plist         = "1"             # maintained; authors the LaunchAgent plist
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+notify-rust   = { version = "4", default-features = false, features = ["d_vendored"] }
 
-# Windows: NO extra dependency. We shell out to `schtasks.exe` with an XML task definition
-# (see D16) — this avoids the archived `planif` crate AND avoids `windows`-rs COM, which would
-# force `unsafe` in our code. All three platforms shell out to the native scheduler CLI.
+# macOS/Windows: NO extra dependency for scheduling or notifications. We write LaunchAgent/task XML
+# ourselves and call the native OS tools by argv. This avoids the archived `planif` crate, avoids
+# `windows`-rs COM unsafe, and avoids the `plist`/default-notify-rust `time` advisory/MSRV trap found
+# during Stage 5.
 
 [build-dependencies]
 clap          = { version = "4", features = ["derive"] }
@@ -105,31 +105,41 @@ Tooling (installed in CI, not deps): `cargo-llvm-cov`, `cargo-deny`, `cargo-dist
 ## 3. Platform gotchas (hard-won; from research — confirm in practice)
 
 ### Linux — systemd `--user` transient timers (shell out to `systemd-run`)
-- One-shot at absolute local time: `systemd-run --user --unit="ccplan-<date>-<idhash>-<rev>-<event>"
-  --on-calendar="YYYY-MM-DD HH:MM:SS" --timer-property=AccuracySec=1s <abs-path-ccplan> fire …`.
+- One-shot at an absolute UTC time: `systemd-run --user --unit="ccplan-<date>-<idhash>-<rev>-<event>"
+  --on-calendar="YYYY-MM-DD HH:MM:SS UTC" --timer-property=AccuracySec=1s <abs-path-ccplan> fire …`.
   **The unit name must carry `date` + `idhash` + `rev` + `event`** (full trigger identity) so
   `clear --date` is unambiguous — same for the launchd label and the Task Scheduler name below.
+- Verified on the dev box with systemd 259: `systemd-analyze calendar` accepts the space-separated
+  UTC form above and rejects the raw RFC3339 `Z` string. The `fire --at` argument still uses RFC3339.
 - **Default `AccuracySec` is 60s** → must set `AccuracySec=1s` or alerts drift up to a minute.
 - Transient timers auto-clean (`systemd-run` sets `RemainAfterElapse=no`) — no manual cleanup needed.
 - **Do NOT set `Persistent=true`** (that's catch-up replay; we forbid it, NG8).
 - Use the **absolute path** to the binary — the user manager's PATH is minimal.
 - **Notification env:** the user manager has a sanitized env. Pass
   `--setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/<uid>/bus` (and capture `DISPLAY`/
-  `WAYLAND_DISPLAY` at `apply` time and `--setenv=` them) or notifications silently fail.
+  `WAYLAND_DISPLAY`/`XAUTHORITY` at `apply` time and `--setenv=` them) or notifications silently fail.
+  `CCPLAN_ROOT` must also be passed through when present so isolated/test stores stay isolated after
+  a scheduled `fire`.
+- `apply` also runs `systemctl --user import-environment DBUS_SESSION_BUS_ADDRESS DISPLAY
+  WAYLAND_DISPLAY XAUTHORITY CCPLAN_ROOT` before creating timers. Rust 2024 makes `std::env::set_var`
+  unsafe, so the fire path does not mutate process env to rediscover D-Bus; the scheduler injects it.
 - Validate the calendar string with `systemd-analyze calendar "<ts>"` and surface errors.
 - List: `systemctl --user list-timers 'ccplan-*'`. Cancel: `systemctl --user stop <unit>.timer` (transient → unloads).
 - Idempotent apply: `stop` the unit name first (ignore "not loaded"), then `systemd-run`.
 
-### macOS — launchd LaunchAgents (`plist` crate to author + `launchctl` to load)
+### macOS — launchd LaunchAgents (manual XML + `launchctl` to load)
 - `StartCalendarInterval` is **inherently recurring** (no `Year` key) → a one-shot must **self-destruct**.
   The `fire` path must, as its last step, `launchctl bootout gui/<uid>/<label>` and delete its own
   plist. (Look up its own label from an arg/env baked into the plist.)
 - Do NOT use `RunAtLoad` (fires at load, not at the scheduled time).
-- Plist at `~/Library/LaunchAgents/io.ccplan.<date>.<idhash>.<rev>.<event>.plist`; `Label` = filename stem.
+- Plist at `~/Library/LaunchAgents/io.ccplan.<date>-<idhash>-<rev>-<event>.plist`; `Label` = filename stem.
 - Load: `launchctl bootstrap gui/$(id -u) <plist>`. Cancel: `launchctl bootout gui/$(id -u)/<label>` + rm.
 - Needs an **active GUI (`gui/<uid>`) session**; over pure SSH `bootstrap gui/<uid>` fails.
-- Notifications: unsigned bare CLI binaries may be silently dropped; a bundle id helps. `osascript -e
-  'display notification …'` is the pragmatic fallback. (notify-rust handles the API; delivery is the caveat.)
+- The plist is emitted manually with XML escaping. `plist = "1"` was intentionally not added in Stage 5
+  because it pulled the vulnerable `time` 0.3.45 graph while the fixed `time` required Rust 1.88,
+  above this project's Rust 1.85 MSRV.
+- Notifications: unsigned bare CLI binaries may be silently dropped; a bundle id helps. Stage 5 uses
+  `osascript -e 'display notification …'` by argv as the pragmatic fallback.
 
 ### Windows — Task Scheduler (shell out to `schtasks.exe` with an XML task; see D16)
 - **No crate.** Do NOT use `planif` (archived) or `windows`-rs COM (would force `unsafe`, violating
@@ -148,13 +158,20 @@ Tooling (installed in CI, not deps): `cargo-llvm-cov`, `cargo-deny`, `cargo-dist
 - **Auto-cleanup:** `EndBoundary` + `DeleteExpiredTaskAfter=PT0S` makes the one-shot task delete itself
   after firing (the Windows analog of systemd's transient auto-clean).
 - **Console flash:** the task launches `ccplan.exe`; to avoid a console window, compile the fire path
-  as a `#![windows_subsystem = "windows"]` GUI-subsystem shim. (`<Hidden>` hides the task in the UI,
-  not the console.)
+  as a `#![windows_subsystem = "windows"]` GUI-subsystem shim. Stage 5 ships `ccplan-fire.exe` for
+  that purpose and points scheduled tasks at the sibling wrapper when it exists. (`<Hidden>` hides
+  the task in the UI, not the console.)
 - **Gotcha:** `schtasks` query output is locale-dependent and brittle to parse — rely on our own
   `triggers.json` for state, and use `schtasks` only for create/delete (clean) and existence checks.
 
-### Notifications — `notify-rust` 4
-- Basic title+body works on all three OSes from one API: `Notification::new().summary(t).body(b).show()?`.
+### Notifications
+- Linux uses `notify-rust` 4 with `default-features = false` and `d_vendored`, limited to the Linux
+  target graph. The default all-platform feature graph pulled extra zbus/platform dependencies and
+  made duplicate/advisory management worse.
+- macOS uses `osascript -e 'display notification … with title …'` by argv.
+- Windows uses a PowerShell WinRT toast bridge by argv (`powershell.exe -NoProfile -NonInteractive
+  -Command <script>`). This is notification-only; `run:` automation and scheduler invocation still
+  have no shell execution path.
 - **Action buttons** (Done/Snooze) are **Linux-only** in notify-rust and need a **resident/blocking
   process** to receive the callback (`wait_for_action` blocks). Our fire path is fire-and-exit →
   action buttons are a **later** feature, Linux-first, and must be `#[cfg]`-gated. Don't attempt cross-platform.
@@ -190,10 +207,11 @@ Tooling (installed in CI, not deps): `cargo-llvm-cov`, `cargo-deny`, `cargo-dist
 
 - Confirm the exact `schtasks /Create /XML` task-XML schema (TimeTrigger + EndBoundary +
   DeleteExpiredTaskAfter + Principal) on a real Windows runner.
-- Confirm `notify-rust` macOS delivery from a launchd-spawned process (TCC/bundle-id behavior).
-- Decide how to integration-test the real schedulers in CI (likely `#[ignore]`d tests run per-OS, or a
-  `--features integration` gate). Real timer firing in CI is flaky — keep it minimal and explicit.
-- Decide whether `ccplan fire` on macOS does its own bootout, or a tiny `fire-once` wrapper does.
+- Confirm macOS `osascript` notification delivery from a launchd-spawned process (TCC/bundle-id behavior).
+- Expand real scheduler CI beyond Linux when reliable macOS/Windows hosted-runner coverage is available.
+  Stage 5 has a Linux-only ignored native integration test and manual Linux near-future fire dogfood.
+- Revisit direct D-Bus address handling if manual `ccplan fire` without scheduler-injected env becomes
+  a product requirement. The current supported native path injects D-Bus env from `apply`.
 - `directories` v5 vs newer — resolved in Stage 3: use `directories = "6"` so the storage layer stays
   current; `cargo-deny` explicitly allows the transitive OSI-approved `MPL-2.0` license from
   `option-ext`, with no advisory or duplicate-version exceptions.
@@ -204,6 +222,40 @@ Tooling (installed in CI, not deps): `cargo-llvm-cov`, `cargo-deny`, `cargo-dist
 
 > Format: `### YYYY-MM-DD — <stage/topic>` then bullets. Record decisions, surprises, dead-ends,
 > and anything a future session must know. This is the anti-amnesia log.
+
+### 2026-06-08 — Stage 5 native scheduler + notifier backends
+- Stage 5 precondition: re-read notes/backlog/checklist plus DESIGN §6.1/§6.4/§7/§11 and re-ran the
+  Stage 4/global gate before coding. Local recon confirmed the Linux dev box has a running
+  `systemd --user` manager.
+- Runtime `run(cli,out)` now builds real `NativeScheduler` and `NativeNotifier` values. `src/platform`
+  selects `systemd-run --user`, LaunchAgents, Task Scheduler, or an unsupported fallback by `#[cfg]`.
+  The real backend modules are `coverage(off)`; testable doctor formatting/timezone logic stays covered.
+- Linux uses transient `systemd-run --user` timers with unit names
+  `ccplan-<date>-<idhash>-<rev>-<event>`, `AccuracySec=1s`, UTC calendar strings, explicit
+  `systemd-analyze calendar` validation, idempotent stop-then-run, and `systemctl --user list-timers`
+  for live status.
+- Trigger backend ids intentionally exclude `scheduled_at`: the public backend identity is
+  `<date>-<idhash>-<rev>-<event>`. The durable fired ledger still keys on `scheduled_at`, so retries
+  remain at-most-once while native unit names stay documented and clearable by date.
+- `apply` calls `Scheduler::prepare()` before reconciliation. On Linux this imports and passes through
+  `DBUS_SESSION_BUS_ADDRESS`, `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`, and `CCPLAN_ROOT`; missing
+  notifier capability prints a warning but does not block scheduling.
+- `fire` now logs notification failures as `notify-failed=...` and treats them as non-fatal. A scope
+  guard calls platform fire cleanup on every exit path, so launchd stale/missing/already-fired jobs
+  self-remove as well as successful jobs.
+- The dependency plan changed for security/MSRV reasons. `plist = "1"` and default `notify-rust` both
+  pulled vulnerable `time` 0.3.45; the fixed `time` line required Rust 1.88 while ccplan's MSRV is
+  Rust 1.85. Stage 5 therefore writes LaunchAgent plist XML manually, uses Linux-only `notify-rust`
+  with vendored D-Bus, and uses macOS `osascript` / Windows PowerShell toast notification bridges.
+- `deny.toml` now scopes the deny graph to `x86_64-unknown-linux-gnu`, matching the Ubuntu cargo-deny
+  CI job. This avoids failing Linux CI on inactive target dependencies while macOS/Windows dependency
+  policy is revisited in backlog B-002.
+- Windows scheduling uses `schtasks.exe /Create /XML` with UTF-8 XML, second-precision `TimeTrigger`,
+  `EndBoundary`, `DeleteExpiredTaskAfter=PT0S`, hidden interactive-user tasks, and delete/list support.
+  A `ccplan-fire` GUI-subsystem wrapper is shipped and preferred for scheduled fire actions when present.
+- Manual Linux dogfood used an isolated `CCPLAN_ROOT`: `set --from`, `apply`, then real systemd timers
+  fired notify/start/end at 17:53/17:54/17:55 IST. The isolated `fire.log` recorded `notify notified`,
+  `start activated`, and `end closed`; `fired.json` recorded all three keys; post-clear live timers = 0.
 
 ### 2026-06-08 — Stage 4 CLI surface + fake-backed apply/fire
 - Stage 4 precondition: re-read `notes.md`, `backlog.md`, `implementation_checklist.md`, and DESIGN
