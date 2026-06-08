@@ -270,34 +270,34 @@ commit one, so every later stage is automatically regression-checked.
 (`git switch -c dev`).
 
 **Steps:**
-- [ ] `git switch -c dev`.
-- [ ] Create the Cargo package: single package with both a library and a binary target. `Cargo.toml`
+- [x] `git switch -c dev`.
+- [x] Create the Cargo package: single package with both a library and a binary target. `Cargo.toml`
       with `edition = "2024"`, `rust-version = "1.85"`, `license = "MIT OR Apache-2.0"`, repository/
       description metadata, the `[lints.rust] unexpected_cfgs` line (notes §2), and the dependency
       block from `notes.md` §2 (add deps as stages need them; you may start with `clap`, `serde`,
       `toml`, `serde_json`).
-- [ ] `src/lib.rs`: add crate-root attr `#![cfg_attr(coverage_nightly, feature(coverage_attribute))]`
+- [x] `src/lib.rs`: add crate-root attr `#![cfg_attr(coverage_nightly, feature(coverage_attribute))]`
       and a stub `pub fn run(...) -> anyhow::Result<()>` (or a typed error) returning `Ok(())`. Export
       a `cli` module with a minimal `clap` `Cli` (just `--version`/`--help` working).
-- [ ] `src/main.rs`: the ~10-line shim (parse args → `run` → `ExitCode`), marked
+- [x] `src/main.rs`: the ~10-line shim (parse args → `run` → `ExitCode`), marked
       `#[cfg_attr(coverage_nightly, coverage(off))]` with a justifying comment.
-- [ ] `rust-toolchain.toml` (channel = latest stable, components rustfmt+clippy), `.gitignore`
+- [x] `rust-toolchain.toml` (channel = latest stable, components rustfmt+clippy), `.gitignore`
       (`/target`, `Cargo.lock` **kept** — it's a binary), `.editorconfig`, `rustfmt.toml`, `clippy.toml`.
-- [ ] `deny.toml` (`cargo deny init` then tighten: deny unknown licenses; allow `MIT`, `Apache-2.0`,
+- [x] `deny.toml` (`cargo deny init` then tighten: deny unknown licenses; allow `MIT`, `Apache-2.0`,
       `Unicode-3.0`, etc.; advisories deny vulnerabilities + `unmaintained`). The dependency set is
       chosen to be advisory-clean, so no `unmaintained` allow-list entries should be needed; if one
       becomes necessary, it must be justified in a comment and raised in `backlog.md`.
-- [ ] `.github/workflows/ci.yml`: matrix `{ubuntu, macos, windows}` running fmt-check, clippy `-D
+- [x] `.github/workflows/ci.yml`: matrix `{ubuntu, macos, windows}` running fmt-check, clippy `-D
       warnings`, `cargo test`; a separate MSRV job (`dtolnay/rust-toolchain@1.85.0` → `cargo check`);
       a coverage job (`RUSTFLAGS="--cfg coverage_nightly" cargo +nightly llvm-cov --fail-under-lines
       100` → upload to Codecov; `check-cfg` already lists `coverage_nightly`); a `cargo-deny` job.
       Use `Swatinem/rust-cache@v2`, `taiki-e/install-action` for tools. (Versions in notes §2.)
-- [ ] `.github/dependabot.yml` for `cargo` + `github-actions`, weekly.
-- [ ] One e2e test in `tests/cli.rs`: `ccplan --version` exits 0 and prints a version
+- [x] `.github/dependabot.yml` for `cargo` + `github-actions`, weekly.
+- [x] One e2e test in `tests/cli.rs`: `ccplan --version` exits 0 and prints a version
       (`assert_cmd` + `predicates`).
 
 **Acceptance Gate:**
-- [ ] DoD gate passes locally (coverage trivially 100% — only the covered stub + excluded shim/main).
+- [x] DoD gate passes locally (coverage trivially 100% — only the covered stub + excluded shim/main).
 - [ ] `git push -u origin dev` and **CI is green on all three OSes**.
 - [ ] Audit entry written; `notes.md` running log updated.
 

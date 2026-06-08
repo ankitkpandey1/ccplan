@@ -1,0 +1,26 @@
+[package]
+name = "ccplan"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+description = "Agent-authorable cross-platform CLI day planner with native time triggers."
+repository = "https://github.com/ankitkpandey1/cc-planner"
+readme = "README.md"
+keywords = ["cli", "planner", "scheduler", "productivity"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+toml = "1"
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage,coverage_nightly)'] }

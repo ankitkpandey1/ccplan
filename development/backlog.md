@@ -21,7 +21,7 @@
 
 | ID | Found in stage | Priority | Description / action | Target |
 |----|:--------------:|:--------:|----------------------|--------|
-| _(none yet)_ | | | | |
+| B-001 | 0 | P2 | Decide whether to keep `directories = "5"` per the pinned design or update to `directories = "6"` before introducing storage paths; record the rationale in notes. | Stage 3 |
 
 ## Resolved
 

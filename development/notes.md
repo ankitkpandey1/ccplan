@@ -203,6 +203,28 @@ Tooling (installed in CI, not deps): `cargo-llvm-cov`, `cargo-deny`, `cargo-dist
 > Format: `### YYYY-MM-DD — <stage/topic>` then bullets. Record decisions, surprises, dead-ends,
 > and anything a future session must know. This is the anti-amnesia log.
 
+### 2026-06-08 — Stage 0 scaffold + CI gate
+- Stage 0 started from `main` with docs only and no `Cargo.toml`; the required pre-stage DoD
+  baseline failed at the missing-manifest boundary, as expected.
+- Created `dev` with `git switch -c dev` before implementation.
+- TDD record: added `tests/cli.rs` first; `cargo test --all-features --workspace` failed because
+  `CARGO_BIN_EXE_ccplan` was unset; adding the minimal lib/bin/clap scaffold made it green.
+- Recon confirmed current tooling details:
+  - `dist` is the current name/CLI for cargo-dist; latest observed release is v0.32.0, while the
+    Cargo subcommand remains supported. Stage 8 should use current `dist init` docs.
+  - `release-plz` docs now use `actions/checkout@v6` and `dtolnay/rust-toolchain@stable`.
+  - `cargo-llvm-cov` sets `cfg(coverage)` and `cfg(coverage_nightly)` itself when run on nightly,
+    but the project keeps the explicit `RUSTFLAGS="--cfg coverage_nightly"` command required by the
+    checklist/docs.
+  - `directories` latest docs show 6.0.0 and `ProjectDirs::{data,config,state}_dir` semantics; the
+    design still pins major 5, so B-001 tracks the decision for the storage stage.
+- `cargo-deny` 0.19 uses `unmaintained = "all"` rather than a lint level; the generated template was
+  used first, then tightened to deny unknown sources, wildcard dependencies, duplicate versions,
+  yanked crates, and all unmaintained advisories.
+- Coverage warning gotcha: with Stage 0's only `coverage(off)` use living in test-only code, nightly
+  reports `feature(coverage_attribute)` as unused unless `unused_features` is allowed under the same
+  `coverage_nightly` cfg. This is not a business-logic exclusion.
+
 ### 2026-06-08 — review round 4 fixes + agent skill (D20)
 - Final-v1 → version/tag/artifacts are **v1.0.0** (was v0.1.0) everywhere.
 - Purged remaining YAML refs in DESIGN (diagram, store, `set --from`, §13) → TOML/JSON.
