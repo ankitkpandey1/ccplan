@@ -10,7 +10,7 @@
 ## 🎯 GOAL
 
 Build **ccplan**, the cross-platform (Linux · macOS · Windows) Rust CLI day-planner specified in
-`DESIGN.md`, to a **production-ready, open-source-shippable `v0.1.0`**:
+`DESIGN.md`, to a **production-ready, open-source-shippable `v1.0.0`**:
 
 - Implements the full CLI surface and semantics in `DESIGN.md` (store → `apply` → `fire`; native
   schedulers; notifications; `run:` automation; lifecycle; invariants Inv-1…Inv-15).
@@ -21,7 +21,7 @@ Build **ccplan**, the cross-platform (Linux · macOS · Windows) Rust CLI day-pl
 - Automated **cross-platform release** producing binaries + installers (shell, PowerShell, Homebrew,
   MSI) when a version tag is pushed.
 
-**You are done when:** `dev` is merged to `main`, tag `v0.1.0` is pushed, the release workflow
+**You are done when:** `dev` is merged to `main`, tag `v1.0.0` is pushed, the release workflow
 produces all platform artifacts, and every box in this file (incl. the Final Ship Gate) is checked
 with a corresponding `audit_log.md` entry.
 
@@ -84,7 +84,7 @@ Each stage MUST proceed through these phases in order. Do not collapse or skip a
 | 5 | notes §3 platform gotchas; `systemd-run`/`launchctl`/`schtasks /Create /XML` exact invocations — **verify on the actual OS**; `notify-rust` API. |
 | 6 | `DESIGN.md` §9 policy; `std::process::Command` argv exec + timeout; Unix file-perms/ownership checks. |
 | 7 | `clap_complete` + `clap_mangen` `build.rs` integration. |
-| 8 | `dist init` config; `release-plz` action; Contributor Covenant; keep-a-changelog; dual-license convention. |
+| 8 | `dist init` config; `release-plz` action; Contributor Covenant; keep-a-changelog; dual-license convention; **agent skill format** (SKILL.md frontmatter conventions). |
 | 9 | Re-read all of `DESIGN.md` (Inv-1…Inv-15) for the conformance pass; the release/branch model (notes D13). |
 
 ---
@@ -97,7 +97,7 @@ Run from repo root. All must succeed (exit 0) before a stage is "done":
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-features --workspace
-cargo +nightly llvm-cov --all-features --workspace --fail-under-lines 100   # 100% after coverage(off) exclusions
+RUSTFLAGS="--cfg coverage_nightly" cargo +nightly llvm-cov --all-features --workspace --fail-under-lines 100   # cfg makes coverage(off) exclusions apply
 cargo deny check                                                            # licenses + advisories + bans
 cargo build --release                                                       # binary builds
 ```
@@ -140,10 +140,11 @@ cc-planner/
 │   ├── commands/              # one module per CLI verb (set, add, show, apply, fire, …)
 │   └── platform/              # real backends; each #[cfg(target_os=…)] + #[coverage(off)]
 │       ├── mod.rs  systemd.rs  launchd.rs  schtasks.rs  notify.rs
-├── tests/                     # integration: cli.rs, snapshots.rs, properties.rs, integration_*.rs
+├── tests/                     # integration: cli.rs, snapshots.rs, properties.rs, agent_docs.rs, integration_*.rs
 │   └── snapshots/             # committed insta *.snap files
 ├── .github/{workflows,ISSUE_TEMPLATE}/  dependabot.yml  PULL_REQUEST_TEMPLATE.md
 ├── README.md  DESIGN.md  CONVENTIONS.md  AGENTS.md  CHANGELOG.md  CONTRIBUTING.md  CODE_OF_CONDUCT.md  SECURITY.md
+├── skills/ccplan/SKILL.md     # loadable agent skill: install check + usage recipe (shipped)
 ├── LICENSE-APACHE  LICENSE-MIT
 └── development/               # DEV-ONLY: notes.md, implementation_checklist.md, audit_log.md, backlog.md
 ```
@@ -244,8 +245,9 @@ cc-planner/
   never transitions." Add the relevant invariant each stage introduces.
 - **Invariant traceability:** by Stage 9 every `DESIGN.md` invariant Inv-1…Inv-15 must have at least
   one named test; reference the invariant in the test name or a `///`-doc.
-- **Coverage maintained, not retrofitted:** run `cargo +nightly llvm-cov --fail-under-lines 100` each
-  stage so the number never regresses. The only legitimate exclusions are listed in the DoD gate's
+- **Coverage maintained, not retrofitted:** run
+  `RUSTFLAGS="--cfg coverage_nightly" cargo +nightly llvm-cov --fail-under-lines 100` each stage so the
+  number never regresses. The only legitimate exclusions are listed in the DoD gate's
   coverage-honesty rule.
 
 ---
@@ -287,7 +289,8 @@ commit one, so every later stage is automatically regression-checked.
       becomes necessary, it must be justified in a comment and raised in `backlog.md`.
 - [ ] `.github/workflows/ci.yml`: matrix `{ubuntu, macos, windows}` running fmt-check, clippy `-D
       warnings`, `cargo test`; a separate MSRV job (`dtolnay/rust-toolchain@1.85.0` → `cargo check`);
-      a coverage job (`cargo-llvm-cov --fail-under-lines 100` → upload to Codecov); a `cargo-deny` job.
+      a coverage job (`RUSTFLAGS="--cfg coverage_nightly" cargo +nightly llvm-cov --fail-under-lines
+      100` → upload to Codecov; `check-cfg` already lists `coverage_nightly`); a `cargo-deny` job.
       Use `Swatinem/rust-cache@v2`, `taiki-e/install-action` for tools. (Versions in notes §2.)
 - [ ] `.github/dependabot.yml` for `cargo` + `github-actions`, weekly.
 - [ ] One e2e test in `tests/cli.rs`: `ccplan --version` exits 0 and prints a version
@@ -405,22 +408,27 @@ fake backend).
 
 **Steps (TDD each):**
 - [ ] `src/context.rs`: `Scheduler` + `Notifier` traits; `Context { clock, scheduler, notifier,
-      store }`. Recording fakes (`RecordingScheduler`, `RecordingNotifier`) in test-fakes module.
+      store }`. Recording fakes (`RecordingScheduler`, `RecordingNotifier`) in the test-fakes module.
+- [ ] **Define the test seam (two entrypoints):** `pub fn run(cli, out) -> Result<()>` builds the
+      *real* `Context` and delegates to `pub fn run_with_context(cli, out, &Context) -> Result<()>`,
+      which holds all dispatch logic. Fake-backed integration tests call `run_with_context` with
+      recording fakes over an `assert_fs::TempDir`; the real `run` is only exercised by the binary.
 - [ ] `src/cli.rs`: full `clap` derive tree for every command in `DESIGN.md` §8 (`set/add/edit/rm/
       done/skip/clear/show/now/next/agenda/apply/status/doctor/fire/completions`), with the exact
       flags, `--json`, `--yes`, `--override-history`, `--dry-run`.
-- [ ] `lib::run` dispatch: implement each command's logic. Reads emit human output and, with `--json`,
-      stable JSON; multi-match reads (`now/next/agenda`) emit JSON **arrays** (Inv-11). Map all errors
-      to the documented exit codes (`2/3/4/5/6`).
+- [ ] `run_with_context` dispatch: implement each command's logic. Reads emit human output and, with
+      `--json`, stable JSON; multi-match reads (`now/next/agenda`) emit JSON **arrays** (Inv-11). Map
+      all errors to the documented exit codes (`2/3/4/5/6`).
 - [ ] `apply` = the **reconciler**: compute desired triggers (notify/start/end per block, future only)
       vs `triggers.json`; call `scheduler.add/remove` to converge (idempotent, Inv-3); import session
       env note deferred to Stage 5's real backend. `--dry-run` prints the diff without calling the scheduler.
 - [ ] `clear` calls the **same reconciler path** to remove that day's triggers (consistency fix), then archives.
 - [ ] `fire` handler: ledger check-and-set → `decide_fire` (§7) → notify/run(stub until Stage 6)/close
       → persist status → append `fire.log`. Stale rev / already-fired → no-op.
-- [ ] Tests: `assert_cmd` e2e for each command over a temp store with a fake scheduler injected via a
-      test entrypoint; `insta` snapshots of `--json` output (with redactions for any timestamps);
-      assert the fake recorded the expected add/remove/notify calls; exit-code tests for each error.
+- [ ] Tests: fake-backed integration tests call **`run_with_context`** (recording fakes + temp store)
+      and assert the fakes recorded the expected add/remove/notify calls; `insta` snapshots of `--json`
+      output (with redactions for timestamps). Reserve **`assert_cmd`** (real binary) for parse/`--help`/
+      exit-code paths and temp-store reads that don't need a fake scheduler.
 - [ ] `proptest`: `apply` is idempotent (apply twice ⇒ identical recorded trigger set).
 
 **Acceptance Gate:**
@@ -441,7 +449,7 @@ traits, plus `doctor`. These are the only modules excluded from coverage.
 - [ ] `src/platform/mod.rs` selects the backend by `#[cfg(target_os=…)]`. Each backend module is
       `#[cfg_attr(coverage_nightly, coverage(off))]` with a justifying comment.
 - [ ] **Linux** (`platform/systemd.rs`): shell out to `systemd-run --user` exactly per notes §3
-      (unit name `ccplan-<idhash>-<rev>-<event>`, `--on-calendar`, `AccuracySec=1s`, `--setenv` for
+      (unit name `ccplan-<date>-<idhash>-<rev>-<event>` — full trigger identity, `--on-calendar`, `AccuracySec=1s`, `--setenv` for
       `DBUS_SESSION_BUS_ADDRESS`/`DISPLAY`; absolute binary path; `systemd-analyze calendar` validation;
       list via `systemctl --user list-timers 'ccplan-*'`; cancel via `stop`; idempotent stop-then-run).
 - [ ] **macOS** (`platform/launchd.rs`): author plist via `plist` crate, `launchctl bootstrap`/
@@ -516,10 +524,10 @@ traits, plus `doctor`. These are the only modules excluded from coverage.
 
 ---
 
-### Stage 8 — OSS hygiene & release engineering
+### Stage 8 — OSS hygiene, agent skill & release engineering
 
-**Objective:** Make the repo a polished, releasable open-source project with automated cross-platform
-release.
+**Objective:** Make the repo a polished, releasable open-source project — including a **shipped,
+tested agent skill** so agents can install and use `ccplan` — with automated cross-platform release.
 
 **Preconditions:** Stage 7 gate green.
 
@@ -530,7 +538,17 @@ release.
       `CONVENTIONS.md`** as the coding standard),
       `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1), `SECURITY.md` (the `run:` threat model + private
       reporting), `CHANGELOG.md` (keep-a-changelog header), `.github/ISSUE_TEMPLATE/{bug,feature}.yml`,
-      `.github/PULL_REQUEST_TEMPLATE.md`, `AGENTS.md` (the canonical agent recipe from the README).
+      `.github/PULL_REQUEST_TEMPLATE.md`.
+- [ ] **Agent skill + AGENTS.md (D20):** write `AGENTS.md` (canonical recipe) and the loadable skill
+      `skills/ccplan/SKILL.md` with valid frontmatter (`name`, `description`, when-to-use) covering:
+      non-interactive install (`cargo binstall ccplan` / shell installer) + `ccplan --version` + `ccplan
+      doctor` verification, the `set --from -` → `apply` recipe, the exit-code table, and the `--json`
+      array contract. Keep the skill's commands copy-pasteable and current with the real CLI.
+- [ ] **Agent-onboarding test** (`tests/agent_docs.rs`): (a) parse `skills/ccplan/SKILL.md` frontmatter
+      and assert required fields exist; (b) extract the recipe's `ccplan …` commands and **run them via
+      `assert_cmd` against a temp store** (with a fake/headless scheduler) asserting success + expected
+      JSON — so the documented agent flow can never silently drift from the real CLI. Keep `AGENTS.md`
+      and `SKILL.md` in sync (one is the source, the other generated/checked, or a test asserts they match).
 - [ ] **release-plz** workflow (`.github/workflows/release-plz.yml`) on `main` — maintains the release
       PR + tags on merge (notes §2 versions).
 - [ ] **dist / cargo-dist** (`dist init`): configure `[workspace.metadata.dist]` with installers
@@ -548,7 +566,7 @@ release.
 
 ---
 
-### Stage 9 — Production readiness & ship `v0.1.0`
+### Stage 9 — Production readiness & ship `v1.0.0`
 
 **Objective:** Final verification, dogfood, and the actual release.
 
@@ -562,9 +580,9 @@ release.
       `next` behave, `clear` cleans up triggers. Record evidence in the audit log.
 - [ ] **Spec conformance pass:** walk `DESIGN.md` invariants Inv-1…Inv-15 and confirm a test exists for
       each; list the test name per invariant in the audit entry.
-- [ ] Finalize `CHANGELOG.md` for `0.1.0`; ensure `version = "0.1.0"`.
+- [ ] Finalize `CHANGELOG.md` for `1.0.0`; ensure `version = "1.0.0"`.
 - [ ] **Ship:** open PR `dev` → `main`; CI green; merge. `release-plz` opens/!updates the release PR;
-      merging it pushes tag `v0.1.0` → `release.yml` builds binaries + shell/PowerShell/Homebrew/MSI
+      merging it pushes tag `v1.0.0` → `release.yml` builds binaries + shell/PowerShell/Homebrew/MSI
       installers + checksums and publishes the GitHub Release.
 - [ ] Verify the published release: download one artifact per OS and smoke-test `ccplan --version`.
 
@@ -573,10 +591,10 @@ release.
 - [ ] 100% coverage; only sanctioned exclusions.
 - [ ] Every Inv-1…Inv-15 has a named test.
 - [ ] Dogfood evidence recorded.
-- [ ] `v0.1.0` tagged; release workflow produced all platform artifacts; artifacts smoke-tested.
+- [ ] `v1.0.0` tagged; release workflow produced all platform artifacts; artifacts smoke-tested.
 - [ ] Final audit entry written summarizing the whole build.
 
-**Commit / tag:** merge PR → `release-plz` tags `v0.1.0`.
+**Commit / tag:** merge PR → `release-plz` tags `v1.0.0`.
 
 ---
 
@@ -584,7 +602,7 @@ release.
 
 - [ ] Consider removing or git-ignoring `development/` from published artifacts (it's dev-only).
 - [ ] Triage "later" features (notification action buttons — Linux-first; status-line integration;
-      calendar import; daily templates) into issues. Do **not** expand `v0.1.0` scope.
+      calendar import; daily templates) into issues. Do **not** expand `v1.0.0` scope.
 
 ---
 

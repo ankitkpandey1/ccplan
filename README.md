@@ -12,7 +12,7 @@
 
 </div>
 
-> **Status:** in active development toward `v0.1.0`. The design is locked (see [`DESIGN.md`](DESIGN.md));
+> **Status:** in active development toward `v1.0.0`. The design is locked (see [`DESIGN.md`](DESIGN.md));
 > implementation follows [`development/implementation_checklist.md`](development/implementation_checklist.md).
 
 ---
@@ -51,7 +51,7 @@ runs on Linux/macOS/Windows, and keeps a human-readable plain-text plan as its s
 - 🤖 **Agent-first CLI** — non-interactive, stable exit codes, `--json` on every read, whole-day authoring from stdin.
 - 🔔 **Native notifications** — at block start and at optional per-block lead times.
 - ✅ **Status tracking** — `done` / `skipped`, with automatic `missed` / `expired` detection.
-- ⚙️ **Per-block automation** — run an allow-listed command when a block fires (opt-in, sandboxed by policy).
+- ⚙️ **Per-block automation** — run an allow-listed command when a block fires (opt-in, policy-gated).
 - 🖥️ **Truly cross-platform** — uses the native scheduler on each OS (systemd / launchd / Task Scheduler). No background daemon.
 - 🔁 **Idempotent & safe** — re-apply converges; atomic writes; at-most-once firing; immutable history.
 - 🌐 **Local & offline** — no account, no network, no telemetry.
@@ -60,7 +60,7 @@ runs on Linux/macOS/Windows, and keeps a human-readable plain-text plan as its s
 
 ## Install
 
-> Prebuilt binaries and installers are produced by the release pipeline starting at `v0.1.0`.
+> Prebuilt binaries and installers are produced by the release pipeline starting at `v1.0.0`.
 > Until then, [build from source](#build-from-source).
 
 ```sh
@@ -107,8 +107,27 @@ That's it — at 11:00 you get a "Focus time" notification, at 11:30 the sync-up
 
 ## For agents
 
-`ccplan` is designed to be filled in by an AI agent. The canonical recipe is **author the whole day,
-then apply**:
+`ccplan` is designed to be filled in by an AI agent.
+
+**Install (agent-driven).** An agent can install `ccplan` non-interactively and confirm it works:
+
+```sh
+# Install the binary (pick what's available in the environment)
+cargo binstall -y ccplan  ||  cargo install ccplan  ||  \
+  curl --proto '=https' --tlsv1.2 -LsSf \
+    https://github.com/ankitkpandey1/cc-planner/releases/latest/download/ccplan-installer.sh | sh
+
+ccplan --version          # confirm install
+ccplan doctor             # confirm the OS scheduler + notifier are usable, with fixes if not
+```
+
+**Load the skill.** The repo ships a ready-to-use agent skill at
+[`skills/ccplan/SKILL.md`](skills/ccplan/SKILL.md). Drop it into your agent's skills directory
+(for Claude Code: `cp -r skills/ccplan ~/.claude/skills/`) so the agent knows when and how to use
+`ccplan` — installation check, the authoring recipe, exit codes, and the JSON contract. A short
+[`AGENTS.md`](AGENTS.md) at the repo root carries the same canonical recipe inline.
+
+**Canonical recipe** — **author the whole day, then apply**:
 
 ```sh
 # An agent composes the full day as TOML and pipes it in, then schedules it.
@@ -143,7 +162,8 @@ Agent-friendly guarantees:
   `5` automation refused (policy/allowlist) · `6` history conflict (needs `--override-history`).
 - **Whole-plan I/O** — `ccplan set --from -` reads a full day from stdin; `ccplan show --json` round-trips it.
 
-A dedicated [`AGENTS.md`](AGENTS.md) ships with the project documenting this recipe for any agent.
+Both [`AGENTS.md`](AGENTS.md) and the [`skills/ccplan/SKILL.md`](skills/ccplan/SKILL.md) skill ship
+with the project and document this recipe for any agent.
 
 ---
 
@@ -227,7 +247,6 @@ grace = "90s"                      # how late a trigger may fire before it's tre
 
 [automation]
 enabled = false                    # per-block `run:` is OFF by default
-allow_shell = false                # reserved; shell execution is never supported (argv only)
 timeout = "5m"                     # max runtime per `run:` command
 allowed_executables = [            # `run:`'s argv[0] must be an absolute path on this list
   "/home/me/bin/sync.sh",

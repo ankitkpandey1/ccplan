@@ -45,6 +45,7 @@ implementation-process docs here.
 | D17 | **Commit convention:** Conventional Commits, but **no `Co-Authored-By` / "Generated with Claude" trailer** of any kind. Clean commit messages only. | User-mandated. |
 | D18 | **Performance is a feature.** The binary is a scheduler fire-target invoked many times a day — fast startup, no needless allocation/cloning, no blocking work on the hot path; borrow over clone, stream over buffer where it matters. Don't micro-optimize pure-logic clarity, but never ship gratuitously wasteful code. | User-mandated. |
 | D19 | **"Don't Make Me Think" CLI UX** (Steve Krug). The interface must be self-evident: obvious command names, consistent flag patterns, helpful `--help` on every command, error messages that say exactly what's wrong **and** how to fix it, sensible defaults so the common path needs almost no flags, and `doctor` to diagnose setup. Zero cognitive load for the common case. | User-mandated. |
+| D20 | **Ship a tested agent skill.** Agents are the primary users, so the project ships `AGENTS.md` + a loadable `skills/ccplan/SKILL.md` (install check → `set --from -` → `apply`, exit codes, JSON contract), and an **agent-onboarding test** (`tests/agent_docs.rs`) that parses the skill frontmatter and runs its documented commands against a temp store so the docs can't drift from the real CLI. README gives non-interactive agent install instructions. | User-mandated. |
 
 ---
 
@@ -67,6 +68,8 @@ directories   = "5"
 blake3        = "1"
 notify-rust   = "4"
 fs2           = "0.4"
+thiserror     = "2"             # library error enum (CONVENTIONS §4); required, do not omit
+anyhow        = "1"             # main/CLI boundary only
 
 [target.'cfg(target_os = "macos")'.dependencies]
 plist         = "1"             # maintained; authors the LaunchAgent plist
@@ -102,8 +105,10 @@ Tooling (installed in CI, not deps): `cargo-llvm-cov`, `cargo-deny`, `cargo-dist
 ## 3. Platform gotchas (hard-won; from research — confirm in practice)
 
 ### Linux — systemd `--user` transient timers (shell out to `systemd-run`)
-- One-shot at absolute local time: `systemd-run --user --unit="ccplan-<idhash>-<rev>-<event>"
+- One-shot at absolute local time: `systemd-run --user --unit="ccplan-<date>-<idhash>-<rev>-<event>"
   --on-calendar="YYYY-MM-DD HH:MM:SS" --timer-property=AccuracySec=1s <abs-path-ccplan> fire …`.
+  **The unit name must carry `date` + `idhash` + `rev` + `event`** (full trigger identity) so
+  `clear --date` is unambiguous — same for the launchd label and the Task Scheduler name below.
 - **Default `AccuracySec` is 60s** → must set `AccuracySec=1s` or alerts drift up to a minute.
 - Transient timers auto-clean (`systemd-run` sets `RemainAfterElapse=no`) — no manual cleanup needed.
 - **Do NOT set `Persistent=true`** (that's catch-up replay; we forbid it, NG8).
@@ -120,7 +125,7 @@ Tooling (installed in CI, not deps): `cargo-llvm-cov`, `cargo-deny`, `cargo-dist
   The `fire` path must, as its last step, `launchctl bootout gui/<uid>/<label>` and delete its own
   plist. (Look up its own label from an arg/env baked into the plist.)
 - Do NOT use `RunAtLoad` (fires at load, not at the scheduled time).
-- Plist at `~/Library/LaunchAgents/io.ccplan.<idhash>.<rev>.<event>.plist`; `Label` = filename stem.
+- Plist at `~/Library/LaunchAgents/io.ccplan.<date>.<idhash>.<rev>.<event>.plist`; `Label` = filename stem.
 - Load: `launchctl bootstrap gui/$(id -u) <plist>`. Cancel: `launchctl bootout gui/$(id -u)/<label>` + rm.
 - Needs an **active GUI (`gui/<uid>`) session**; over pure SSH `bootstrap gui/<uid>` fails.
 - Notifications: unsigned bare CLI binaries may be silently dropped; a bundle id helps. `osascript -e
@@ -129,8 +134,8 @@ Tooling (installed in CI, not deps): `cargo-llvm-cov`, `cargo-deny`, `cargo-dist
 ### Windows — Task Scheduler (shell out to `schtasks.exe` with an XML task; see D16)
 - **No crate.** Do NOT use `planif` (archived) or `windows`-rs COM (would force `unsafe`, violating
   `#![forbid(unsafe_code)]`). Shell out to `schtasks.exe`, consistent with the Linux/macOS backends.
-- **Create:** write a task XML to a temp file, then `schtasks /Create /TN "\ccplan\<idhash>-<rev>-<event>"
-  /XML <file> /F`. The XML gives full control and **second precision** (unlike `/ST`, which is `HH:mm`
+- **Create:** write a task XML to a temp file, then `schtasks /Create /TN "\ccplan\<date>-<idhash>-<rev>-<event>"
+  /XML <file> /F` (task name carries the full identity — date + idhash + rev + event). The XML gives full control and **second precision** (unlike `/ST`, which is `HH:mm`
   only). Minimal XML shape:
   - `<TimeTrigger><StartBoundary>2026-06-08T15:30:00</StartBoundary><EndBoundary>…</EndBoundary></TimeTrigger>`
   - `<Settings>`: `<DeleteExpiredTaskAfter>PT0S</DeleteExpiredTaskAfter>` + `<Hidden>true</Hidden>` +
@@ -163,15 +168,21 @@ Tooling (installed in CI, not deps): `cargo-llvm-cov`, `cargo-deny`, `cargo-dist
 - Same pattern for `Scheduler` and `Notifier`: trait + real impl (shell-out / native) + recording fake.
   Logic depends on the trait; tests inject fakes and assert on recorded calls. Real OS scheduling is
   NEVER touched in unit tests.
-- Thread a `Context { clock, scheduler, notifier, fs_root }` through `lib::run`. Tests build a
-  `Context` of fakes over an `assert_fs::TempDir`.
+- **Two entrypoints (the test seam):** `pub fn run(cli, out) -> Result<()>` builds the *real*
+  `Context { clock, scheduler, notifier, store }` and delegates to
+  `pub fn run_with_context(cli, out, &Context) -> Result<()>`. Fake-backed integration tests call
+  `run_with_context` with recording fakes over an `assert_fs::TempDir`; `assert_cmd` (real binary) is
+  reserved for parse/`--help`/exit-code and temp-store paths that don't need a fake scheduler.
 - `main.rs` stays ~10 lines: parse → `run` → `ExitCode`. The `assert_cmd` e2e tests cover it; it may
   also be `#[coverage(off)]`.
 - Coverage exclusions (the ONLY allowed ones): platform `#[cfg(target_os=…)]` real-backend modules,
   the real `SystemClock`/shell-out impls, `unreachable!()`/defensive `panic!`, and `main`. Mark with
   `#[cfg_attr(coverage_nightly, coverage(off))]`. Put `#![cfg_attr(coverage_nightly,
   feature(coverage_attribute))]` at the crate root.
-- Coverage runs on **nightly** (`cargo +nightly llvm-cov`). The crate must still build/clippy clean on stable.
+- Coverage runs on **nightly** with the cfg set:
+  `RUSTFLAGS="--cfg coverage_nightly" cargo +nightly llvm-cov …` — without that cfg the
+  `#[cfg_attr(coverage_nightly, coverage(off))]` exclusions don't compile/apply. The crate must still
+  build/clippy clean on **stable** (where `coverage_nightly` is unset, so those attrs are no-ops).
 
 ---
 
@@ -191,6 +202,24 @@ Tooling (installed in CI, not deps): `cargo-llvm-cov`, `cargo-deny`, `cargo-dist
 
 > Format: `### YYYY-MM-DD — <stage/topic>` then bullets. Record decisions, surprises, dead-ends,
 > and anything a future session must know. This is the anti-amnesia log.
+
+### 2026-06-08 — review round 4 fixes + agent skill (D20)
+- Final-v1 → version/tag/artifacts are **v1.0.0** (was v0.1.0) everywhere.
+- Purged remaining YAML refs in DESIGN (diagram, store, `set --from`, §13) → TOML/JSON.
+- Unknown-field policy unified: **reject everywhere** (read + write), `deny_unknown_fields` — no
+  more "preserve-with-warning on read".
+- Trigger names now carry the **full identity `date-idhash-rev-event`** on all three backends
+  (systemd unit / launchd label / schtasks name) so `clear --date` is unambiguous.
+- Coverage commands now set `RUSTFLAGS="--cfg coverage_nightly"` so the `coverage(off)` exclusions
+  actually compile/apply (DoD, CI, CONVENTIONS, audit template, notes).
+- Added `thiserror = "2"` + `anyhow = "1"` to pinned deps (error model was referenced but unpinned).
+- README: "sandboxed by policy" → "policy-gated" (we don't sandbox, NG6); removed the `allow_shell`
+  config key (shell never supported, NG9).
+- Defined the test seam: `run(cli,out)` → `run_with_context(cli,out,&Context)`; fakes call the latter,
+  `assert_cmd` reserved for parse/help/temp-store paths.
+- **D20:** ship `AGENTS.md` + loadable `skills/ccplan/SKILL.md` + an agent-onboarding test
+  (`tests/agent_docs.rs`) that runs the skill's documented commands so docs can't drift from the CLI;
+  README now has non-interactive agent install instructions.
 
 ### 2026-06-08 — planning hardened (decisions D14–D19, conventions, Windows backend)
 - Added engineering mandates: SOTA/idiomatic, `#![forbid(unsafe_code)]`, strong typing, comments=why,

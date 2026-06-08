@@ -147,7 +147,7 @@ The interface must be self-evident; the common case needs almost no thought.
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings      # pedantic on
 cargo test --all-features --workspace
-cargo +nightly llvm-cov --all-features --workspace --fail-under-lines 100
+RUSTFLAGS="--cfg coverage_nightly" cargo +nightly llvm-cov --all-features --workspace --fail-under-lines 100
 cargo deny check
 ```
 

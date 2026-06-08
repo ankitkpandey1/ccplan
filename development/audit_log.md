@@ -36,7 +36,7 @@
 - `cargo fmt --all -- --check`            → <result>
 - `cargo clippy --all-targets --all-features -- -D warnings`  → <result>
 - `cargo test --all-features --workspace` → <N passed; 0 failed>
-- `cargo +nightly llvm-cov --all-features --workspace --fail-under-lines 100` → <coverage %; pass>
+- `RUSTFLAGS="--cfg coverage_nightly" cargo +nightly llvm-cov --all-features --workspace --fail-under-lines 100` → <coverage %; pass>
 - `cargo deny check`                      → <result>
 - (Stage 0+) CI run link + status on ubuntu/macos/windows.
 - Coverage exclusions added this stage (file:item) + one-line justification each.

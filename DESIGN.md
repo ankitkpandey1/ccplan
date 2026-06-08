@@ -48,7 +48,7 @@ human can both edit.
 
 - **G1 — Agent-first CLI.** Non-interactive, machine-readable commands an agent can use to author
   and mutate a single day's time-blocked plan reliably. Authoring the *whole day in one shot*
-  (read YAML/JSON from stdin) is first-class.
+  (read TOML/JSON from stdin) is first-class.
 - **G2 — Plain-text source of truth.** A human-readable, diff-friendly plan file, editable by CLI
   or by hand/agent, whose schedule derives a stable **rev** that triggers are keyed to (§6.3).
 - **G3 — Time-triggered notifications.** Notifications at block start and optional per-block lead
@@ -98,7 +98,7 @@ Flows:
 ```
                 author/edit                compile (apply)                 fire (per OS scheduler)
   agent/human ─────────────▶ plan file ─────────────────────▶  Scheduler  ─────────────▶ ccplan fire
-  (CLI or direct edit)      (YAML +      (idempotent          backend                    --date --id
+  (CLI or direct edit)      (TOML +      (idempotent          backend                    --date --id
                              schedule     reconciler)         (systemd /                 --event --rev
                              rev)                             launchd /                  --at …)
                                                               schtasks)                        │
@@ -107,7 +107,7 @@ Flows:
 ```
 
 Three responsibilities, deliberately separated:
-1. **Store** — a per-day YAML plan file. Canonical. Each block's schedule derives a **rev** (§6.3).
+1. **Store** — a per-day TOML plan file. Canonical. Each block's schedule derives a **rev** (§6.3).
 2. **Compile** — `ccplan apply` reconciles OS-level triggers to match the plan. Derived, disposable,
    reproducible, idempotent.
 3. **Fire** — `ccplan fire …` is what a trigger invokes: it validates identity + freshness against a
@@ -120,9 +120,9 @@ Two traits isolate all OS-specific behavior; the reconciler and lifecycle logic 
 **`Scheduler`** — create/cancel/list time-triggers, keyed by a portable trigger identity (§6.3).
 | OS | Backend | Trigger object | Identity / namespace |
 |----|---------|----------------|----------------------|
-| Linux | `systemd --user` transient timers (`systemd-run --user --on-calendar=…`) | one timer+service per event | unit `ccplan-<date>-<idhash>-<event>.timer` (id hashed + `systemd-escape`d) |
-| macOS | launchd LaunchAgents | one plist per event (`StartCalendarInterval`), `launchctl bootstrap` | label `io.ccplan.<date>.<idhash>.<event>` |
-| Windows | Task Scheduler (`schtasks` / win32 API) | one task per event | path `\ccplan\<date>\<idhash>-<event>` |
+| Linux | `systemd --user` transient timers (`systemd-run --user --on-calendar=…`) | one timer+service per event | unit `ccplan-<date>-<idhash>-<rev>-<event>.timer` (id hashed + `systemd-escape`d) |
+| macOS | launchd LaunchAgents | one plist per event (`StartCalendarInterval`), `launchctl bootstrap` | label `io.ccplan.<date>.<idhash>.<rev>.<event>` |
+| Windows | Task Scheduler (`schtasks.exe /Create /XML`) | one task per event | path `\ccplan\<date>-<idhash>-<rev>-<event>` |
 
 A **native scheduler is required on every platform** — there is no resident daemon or polling
 fallback. Native schedulers may deliver a trigger late (after sleep/DST); the freshness gate at
@@ -207,8 +207,9 @@ Consequences:
 
 **Other field rules:** `id` unique per day (auto-slugged from title if omitted); exactly one of
 `end`/`duration`; times resolve to absolute instants via `date`+`timezone`; `run` is an argv array
-whose `argv[0]` must be an allowlisted absolute path (§9); unknown fields rejected on write,
-preserved-with-warning on read; overlaps allowed (query semantics in §8).
+whose `argv[0]` must be an allowlisted absolute path (§9); **unknown fields are rejected everywhere —
+on both read and write** (`#[serde(deny_unknown_fields)]`), so an agent gets a hard error instead of
+silent drift; overlaps allowed (query semantics in §8).
 
 ### 6.4 Fired-event ledger (at-most-once)
 
@@ -268,7 +269,7 @@ requirements (Inv-2):
 Authoring / mutation:
 | Command | Purpose |
 |---|---|
-| `ccplan set --from <file\|-> [--date D] [--override-history]` | Replace the day's plan from YAML/JSON. **Terminal blocks (done/skipped/missed/expired) are always retained**, carried forward by `id` *even if the incoming plan omits them*; only pending/active blocks are replaced. Modifying or dropping a terminal block, or reusing a terminal `id`, requires `--override-history` (else exit `6`). Validates, writes atomically. |
+| `ccplan set --from <file\|-> [--date D] [--override-history]` | Replace the day's plan from TOML/JSON. **Terminal blocks (done/skipped/missed/expired) are always retained**, carried forward by `id` *even if the incoming plan omits them*; only pending/active blocks are replaced. Modifying or dropping a terminal block, or reusing a terminal `id`, requires `--override-history` (else exit `6`). Validates, writes atomically. |
 | `ccplan add --title T --start 11:00 [--end\|--duration] [--notify] [--run …] [--id]` | Upsert one block (same `id` ⇒ update a non-terminal block). |
 | `ccplan edit <id> --start … --title …` | Patch a non-terminal block. |
 | `ccplan rm <id>` | Remove a pending block. |
@@ -411,7 +412,8 @@ This is the highest-risk part of the design. Controls (defense in depth):
   `triggers.json` records owned units + their `rev` for diff-based reconcile and orphan cleanup.
 - **Grace window** is configurable (`config.grace`, default ~90s) and applied per the §7 event table.
 - **Quality gates.** `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
-  `cargo llvm-cov --fail-under-lines 100` (after the documented `coverage(off)` exclusions),
+  `RUSTFLAGS="--cfg coverage_nightly" cargo +nightly llvm-cov --fail-under-lines 100` (the cfg makes
+  the documented `coverage(off)` exclusions compile + apply),
   `cargo deny check` — all green in CI on a Linux/macOS/Windows matrix.
 
 ## 13. Build sequence
@@ -420,7 +422,7 @@ Platform-parallel: the core is OS-agnostic, then all three native backends are f
 then automation and the operational surface.
 
 - **Phase 0 — Core CLI / schema / store (OS-agnostic):** computed schedule `rev`;
-  `set`/`show`/`add`/`edit`/`rm`/`done`/`skip`/`clear` with archive over the YAML store (atomic
+  `set`/`show`/`add`/`edit`/`rm`/`done`/`skip`/`clear` with archive over the TOML store (atomic
   locked writes, validation, ids); `now`/`next`/`agenda` (arrays). No OS triggers yet (G1, G2, G4,
   Inv-2/4/5/7/9/11/15).
 - **Phase 1 — Native scheduling & notifications (Linux, macOS, Windows together):**
