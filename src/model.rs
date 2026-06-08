@@ -397,6 +397,13 @@ impl<'de> Deserialize<'de> for BlockId {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanDate(Date);
 
+impl PlanDate {
+    #[must_use]
+    pub const fn as_jiff_date(&self) -> Date {
+        self.0
+    }
+}
+
 impl fmt::Display for PlanDate {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{}", self.0)
@@ -443,6 +450,17 @@ impl TimeZoneName {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// Resolves this validated IANA name to a `jiff` time zone.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying time zone database can no longer load the name.
+    pub fn to_time_zone(&self) -> Result<TimeZone, FieldParseError> {
+        TimeZone::get(&self.0).map_err(|_| FieldParseError::TimeZone {
+            value: self.0.clone(),
+        })
     }
 }
 
@@ -511,6 +529,24 @@ impl ClockTime {
     #[must_use]
     pub const fn minutes_since_midnight(self) -> u16 {
         self.minutes_since_midnight
+    }
+
+    #[must_use]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "ClockTime validates the minute count is within a single day"
+    )]
+    pub const fn hour(self) -> i8 {
+        (self.minutes_since_midnight / 60) as i8
+    }
+
+    #[must_use]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "ClockTime validates the minute count is within a single day"
+    )]
+    pub const fn minute(self) -> i8 {
+        (self.minutes_since_midnight % 60) as i8
     }
 
     #[must_use]
@@ -796,6 +832,16 @@ pub enum Status {
     Expired,
 }
 
+impl Status {
+    #[must_use]
+    pub const fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Done | Self::Skipped | Self::Missed | Self::Expired
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ScheduleRev(String);
 
@@ -830,4 +876,19 @@ pub enum FieldParseError {
     Duration { value: String },
     #[error("run argv must contain argv[0]")]
     Run,
+}
+
+#[cfg(test)]
+mod timezone_name_tests {
+    use super::{FieldParseError, TimeZoneName};
+
+    #[test]
+    fn time_zone_lookup_reports_invalid_private_name() {
+        let timezone = TimeZoneName("Not/AZone".to_owned());
+
+        assert!(matches!(
+            timezone.to_time_zone(),
+            Err(FieldParseError::TimeZone { value }) if value == "Not/AZone"
+        ));
+    }
 }
