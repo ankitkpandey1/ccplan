@@ -1,6 +1,7 @@
 //! Unsupported-platform scheduler placeholder.
-
-#![cfg_attr(coverage_nightly, coverage(off))]
+//!
+//! These stubs only ever return `Unavailable`; they perform no real work but are still IO-boundary
+//! placeholders, so each carries a fn-level `coverage(off)` rather than a module-scope exclusion.
 
 use crate::{
     context::{Scheduler, SchedulerError},
@@ -11,12 +12,14 @@ use crate::{
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct NativeScheduler;
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl NativeScheduler {
     pub(crate) fn new() -> Result<Self, SchedulerError> {
         Ok(Self)
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl Scheduler for NativeScheduler {
     fn prepare(&self) -> Result<(), SchedulerError> {
         Err(SchedulerError::Unavailable)
@@ -35,6 +38,7 @@ impl Scheduler for NativeScheduler {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub(crate) fn doctor_check() -> DoctorCheck {
     DoctorCheck::error(
         "scheduler",

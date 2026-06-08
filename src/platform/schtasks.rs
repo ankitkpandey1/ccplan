@@ -1,6 +1,9 @@
 //! Windows Task Scheduler backend.
-
-#![cfg_attr(coverage_nightly, coverage(off))]
+//!
+//! Every function here is process/file IO, so each carries a fn-level `coverage(off)`; the pure XML
+//! and argument formatting lives in `super::format` (coverage-on, unit-tested on every host). There
+//! is intentionally no module-scope `coverage(off)`, so the anti-gaming guard can prove no business
+//! logic hides here.
 
 use std::{
     env, fs,
@@ -8,11 +11,16 @@ use std::{
     process::{Command, Output},
 };
 
-use jiff::{SignedDuration, Timestamp, tz::TimeZone};
+use jiff::{SignedDuration, tz::TimeZone};
 
 use crate::{
     context::{Scheduler, SchedulerError},
-    platform::{DoctorCheck, fire_args},
+    platform::{
+        DoctorCheck, fire_args,
+        format::{
+            parse_task_names, quote_windows_arg, windows_boundary, windows_task_name, xml_escape,
+        },
+    },
     store::TriggerRecord,
 };
 
@@ -21,6 +29,7 @@ pub(crate) struct NativeScheduler {
     binary: PathBuf,
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl NativeScheduler {
     pub(crate) fn new() -> Result<Self, SchedulerError> {
         let binary =
@@ -31,6 +40,7 @@ impl NativeScheduler {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl Scheduler for NativeScheduler {
     fn prepare(&self) -> Result<(), SchedulerError> {
         Ok(())
@@ -41,7 +51,12 @@ impl Scheduler for NativeScheduler {
         let path = temp_xml_path(&trigger.backend_id);
         fs::write(&path, xml).map_err(io_error("write task XML"))?;
         let output = Command::new("schtasks.exe")
-            .args(["/Create", "/TN", &task_name(&trigger.backend_id), "/XML"])
+            .args([
+                "/Create",
+                "/TN",
+                &windows_task_name(&trigger.backend_id),
+                "/XML",
+            ])
             .arg(&path)
             .arg("/F")
             .output()
@@ -52,7 +67,7 @@ impl Scheduler for NativeScheduler {
 
     fn remove(&self, backend_id: &str) -> Result<(), SchedulerError> {
         let output = Command::new("schtasks.exe")
-            .args(["/Delete", "/TN", &task_name(backend_id), "/F"])
+            .args(["/Delete", "/TN", &windows_task_name(backend_id), "/F"])
             .output()
             .map_err(command_error("schtasks /Delete"))?;
         if output.status.success() || is_missing_task(&output) {
@@ -72,6 +87,7 @@ impl Scheduler for NativeScheduler {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub(crate) fn doctor_check() -> DoctorCheck {
     match Command::new("schtasks.exe").arg("/Query").output() {
         Ok(output) if output.status.success() => {
@@ -90,13 +106,15 @@ pub(crate) fn doctor_check() -> DoctorCheck {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn task_xml(binary: &Path, trigger: &TriggerRecord) -> Result<String, SchedulerError> {
-    let start = windows_boundary(trigger.scheduled_at);
+    let zone = TimeZone::system();
+    let start = windows_boundary(trigger.scheduled_at, &zone);
     let end = trigger
         .scheduled_at
         .checked_add(SignedDuration::from_secs(600))
         .map_err(|error| SchedulerError::Operation(error.to_string()))?;
-    let end = windows_boundary(end);
+    let end = windows_boundary(end, &zone);
     let arguments = fire_args(trigger)
         .iter()
         .map(|arg| quote_windows_arg(arg))
@@ -142,13 +160,7 @@ fn task_xml(binary: &Path, trigger: &TriggerRecord) -> Result<String, SchedulerE
     ))
 }
 
-fn windows_boundary(timestamp: Timestamp) -> String {
-    timestamp
-        .to_zoned(TimeZone::system())
-        .strftime("%Y-%m-%dT%H:%M:%S")
-        .to_string()
-}
-
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn fire_binary(binary: &Path) -> PathBuf {
     let candidate = binary.with_file_name("ccplan-fire.exe");
     if candidate.exists() {
@@ -158,60 +170,22 @@ fn fire_binary(binary: &Path) -> PathBuf {
     }
 }
 
-fn task_name(backend_id: &str) -> String {
-    format!("\\ccplan\\{backend_id}")
-}
-
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn temp_xml_path(backend_id: &str) -> PathBuf {
     env::temp_dir().join(format!("ccplan-{backend_id}-{}.xml", std::process::id()))
 }
 
-fn parse_task_names(output: &str) -> Vec<String> {
-    let mut names = Vec::new();
-    for line in output.lines() {
-        let trimmed = line.trim();
-        if let Some(name) = trimmed
-            .strip_prefix("TaskName:")
-            .map(str::trim)
-            .and_then(|value| value.strip_prefix("\\ccplan\\"))
-        {
-            names.push(name.to_owned());
-        }
-    }
-    names.sort();
-    names
-}
-
-fn quote_windows_arg(arg: &str) -> String {
-    if arg.is_empty()
-        || arg
-            .bytes()
-            .any(|byte| byte.is_ascii_whitespace() || byte == b'"')
-    {
-        let escaped = arg.replace('"', r#"\""#);
-        format!(r#""{escaped}""#)
-    } else {
-        arg.to_owned()
-    }
-}
-
-fn xml_escape(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
-}
-
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn command_error(action: &'static str) -> impl FnOnce(std::io::Error) -> SchedulerError {
     move |error| SchedulerError::Operation(format!("{action} failed: {error}"))
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn io_error(action: &'static str) -> impl FnOnce(std::io::Error) -> SchedulerError {
     move |error| SchedulerError::Operation(format!("{action} failed: {error}"))
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn ensure_success(action: &str, output: &Output) -> Result<(), SchedulerError> {
     if output.status.success() {
         Ok(())
@@ -220,10 +194,12 @@ fn ensure_success(action: &str, output: &Output) -> Result<(), SchedulerError> {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn failed_output(action: &str, output: &Output) -> SchedulerError {
     SchedulerError::Operation(output_summary(action, output))
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn output_summary(action: &str, output: &Output) -> String {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -235,6 +211,7 @@ fn output_summary(action: &str, output: &Output) -> String {
     format!("{action} exited with {}: {message}", output.status)
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn is_missing_task(output: &Output) -> bool {
     let text = format!(
         "{}{}",

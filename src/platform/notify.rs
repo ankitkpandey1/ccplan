@@ -1,6 +1,9 @@
 //! Desktop notification backend.
-
-#![cfg_attr(coverage_nightly, coverage(off))]
+//!
+//! Every function here is environment/process/D-Bus IO, so each carries a fn-level `coverage(off)`
+//! (the real notifier is never driven by the in-process test suite, which uses a recording fake).
+//! The pure string quoters/escapers it needs on macOS/Windows live in `super::format` (coverage-on,
+//! unit-tested on every host). There is intentionally no module-scope `coverage(off)`.
 
 use crate::{
     context::{Notification, Notifier, NotifyError},
@@ -10,6 +13,7 @@ use crate::{
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct NativeNotifier;
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl Notifier for NativeNotifier {
     fn check(&self) -> Result<(), NotifyError> {
         check_notification_environment()
@@ -21,6 +25,7 @@ impl Notifier for NativeNotifier {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub(crate) fn doctor_check() -> DoctorCheck {
     match check_notification_environment() {
         Ok(()) => DoctorCheck::ok("notifier", "desktop notification environment is present"),
@@ -32,11 +37,13 @@ pub(crate) fn doctor_check() -> DoctorCheck {
     }
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn check_notification_environment() -> Result<(), NotifyError> {
     platform_notification_check()
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn platform_notification_check() -> Result<(), NotifyError> {
     if std::env::var_os("DBUS_SESSION_BUS_ADDRESS").is_some() {
         return Ok(());
@@ -53,21 +60,25 @@ fn platform_notification_check() -> Result<(), NotifyError> {
 }
 
 #[cfg(target_os = "macos")]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn platform_notification_check() -> Result<(), NotifyError> {
     command_available("osascript", "osascript is unavailable")
 }
 
 #[cfg(target_os = "windows")]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn platform_notification_check() -> Result<(), NotifyError> {
     command_available("powershell.exe", "PowerShell is unavailable")
 }
 
 #[cfg(not(any(unix, target_os = "windows")))]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn platform_notification_check() -> Result<(), NotifyError> {
     Err(NotifyError::Unavailable)
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn command_available(command: &str, message: &str) -> Result<(), NotifyError> {
     std::process::Command::new(command)
         .arg("--help")
@@ -77,6 +88,7 @@ fn command_available(command: &str, message: &str) -> Result<(), NotifyError> {
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn runtime_bus_path() -> Option<String> {
     std::env::var("XDG_RUNTIME_DIR")
         .ok()
@@ -85,6 +97,7 @@ fn runtime_bus_path() -> Option<String> {
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn send_native_notification(notification: &Notification) -> Result<(), NotifyError> {
     notify_rust::Notification::new()
         .summary(&notification.title)
@@ -95,11 +108,12 @@ fn send_native_notification(notification: &Notification) -> Result<(), NotifyErr
 }
 
 #[cfg(target_os = "macos")]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn send_native_notification(notification: &Notification) -> Result<(), NotifyError> {
     let script = format!(
         "display notification {} with title {}",
-        applescript_string(&notification.body),
-        applescript_string(&notification.title)
+        super::format::applescript_string(&notification.body),
+        super::format::applescript_string(&notification.title)
     );
     let output = std::process::Command::new("osascript")
         .args(["-e", &script])
@@ -109,15 +123,16 @@ fn send_native_notification(notification: &Notification) -> Result<(), NotifyErr
 }
 
 #[cfg(target_os = "windows")]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn send_native_notification(notification: &Notification) -> Result<(), NotifyError> {
     let xml = format!(
         "<toast><visual><binding template=\"ToastGeneric\"><text>{}</text><text>{}</text></binding></visual></toast>",
-        xml_escape(&notification.title),
-        xml_escape(&notification.body)
+        super::format::xml_escape(&notification.title),
+        super::format::xml_escape(&notification.body)
     );
     let script = format!(
         r#"[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null; [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] > $null; $xml = New-Object Windows.Data.Xml.Dom.XmlDocument; $xml.LoadXml({}); $toast = [Windows.UI.Notifications.ToastNotification]::new($xml); [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("ccplan").Show($toast)"#,
-        powershell_string(&xml)
+        super::format::powershell_string(&xml)
     );
     let output = std::process::Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
@@ -127,11 +142,13 @@ fn send_native_notification(notification: &Notification) -> Result<(), NotifyErr
 }
 
 #[cfg(not(any(unix, target_os = "windows")))]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn send_native_notification(_notification: &Notification) -> Result<(), NotifyError> {
     Err(NotifyError::Unavailable)
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn command_success(command: &str, output: &std::process::Output) -> Result<(), NotifyError> {
     if output.status.success() {
         return Ok(());
@@ -147,24 +164,4 @@ fn command_success(command: &str, output: &std::process::Output) -> Result<(), N
         "{command} exited with {}: {message}",
         output.status
     )))
-}
-
-#[cfg(target_os = "macos")]
-fn applescript_string(value: &str) -> String {
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
-}
-
-#[cfg(target_os = "windows")]
-fn powershell_string(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
-}
-
-#[cfg(target_os = "windows")]
-fn xml_escape(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
 }

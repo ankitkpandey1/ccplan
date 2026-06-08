@@ -4,6 +4,7 @@ use std::io::Write;
 
 use crate::{context::ContextRefs, error::Result, model::PlanDate, store::TriggerRecord};
 
+mod format;
 mod notify;
 
 #[cfg(target_os = "macos")]
