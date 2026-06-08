@@ -1101,3 +1101,110 @@ both pass.
 Still open (out of this pass's scope): B-002/3/4/5 (CI/macOS/Windows verification, packaging),
 B-009 (full launchd §6.1 grammar conformance test), B-010, B-013 (`--date` on done/skip/rm),
 B-015 (`is_lock_contention` narrowing), B-016 (status overcount).
+
+---
+
+## Stage 7 — CLI niceties: completions & man page — 2026-06-08
+
+**Commit(s):** local changes (to be committed)   ·   **Branch:** dev
+
+### A. Recon summary
+- Re-read `development/goal_prompt.md`, `development/notes.md`, `development/backlog.md`,
+  `development/implementation_checklist.md`, `Reviews.md`, `DESIGN.md`, and `CONVENTIONS.md`.
+- Re-ran the previous Stage 6/global gate before implementation: fmt, clippy, all-features tests,
+  100% line coverage, cargo-deny, release build, MSRV check, anti-gaming guards, real Linux integration,
+  and post-integration timer cleanup were green.
+- Checked official docs.rs references for the current APIs: `clap_complete::generate_to` / runtime
+  `generate`, and `clap_mangen::Man::render`.
+
+### B. What was built
+- Added `clap_complete` for runtime completion generation and build-time generation; added
+  `clap_mangen` as a build dependency for the man page.
+- Implemented `build.rs`, which generates bash, zsh, fish, PowerShell completions plus `ccplan.1`
+  into Cargo's `OUT_DIR`.
+- Added `src/cli_command.rs`, a lightweight `clap::Command` builder included by `build.rs`. It keeps
+  build-time artifact generation narrow instead of compiling domain models and runtime parsing types
+  into the build script.
+- Wired `ccplan completions <shell>` to `clap_complete::generate` using the real derive parser's
+  `Cli::command()` at runtime.
+- Exposed generated artifact paths from `build.rs` as compile-time env vars, then verified those files
+  from integration tests.
+
+### C. Self-review findings & fixes
+- Started TDD with a failing `assert_cmd` test proving the previous completion placeholder was still
+  emitted.
+- Tightened the command-builder drift guard after first implementation: the unit test now compares
+  subcommand names plus argument IDs, long flags, positional indexes, and requiredness against the
+  derive parser.
+- Updated the old command-layer non-interactive test that still asserted the Stage 7 placeholder text.
+- No new `coverage(off)` exclusions were added.
+- `cargo tree --duplicates` now prints same-version `clap v4.6.1` entries across normal/build graphs
+  because Stage 7 has a `build.rs` using clap-based generators. This is not a multiple-version conflict:
+  `cargo deny check` still passes with `[bans] multiple-versions = "deny"`.
+
+### D. Evidence
+- `cargo fmt --all -- --check`:
+  ```text
+  <no output; exit 0>
+  ```
+- Anti-gaming guards:
+  ```text
+  no module-scope coverage(off) in src; exit 0
+  no std::env::temp_dir/env::temp_dir in tests; exit 0
+  ```
+- `cargo clippy --all-targets --all-features -- -D warnings`:
+  ```text
+  Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.33s
+  ```
+- `cargo test --all-features --workspace`:
+  ```text
+  131 passed; 0 failed; 0 filtered out; 1 ignored (sanctioned Linux integration)
+  ```
+- `RUSTFLAGS="--cfg coverage_nightly" cargo +nightly llvm-cov --all-features --workspace --fail-under-lines 100`:
+  ```text
+  TOTAL 2434 lines, 0 missed lines, 100.00% line cover
+  TOTAL 333 functions, 0 missed functions, 100.00% function cover
+  ```
+- `cargo deny check`:
+  ```text
+  advisories ok, bans ok, licenses ok, sources ok
+  ```
+- `cargo build --release`:
+  ```text
+  Finished `release` profile [optimized] target(s) in 8.15s
+  ```
+- `cargo +1.85.0 check --all-features --workspace`:
+  ```text
+  Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.16s
+  ```
+- `cargo test --test integration_linux -- --ignored --nocapture`:
+  ```text
+  running
+  test systemd_apply_creates_and_clear_removes_timer ... ok
+  test result: ok. 1 passed; 0 failed; 0 ignored
+  ```
+- Post-integration cleanup:
+  ```text
+  systemctl --user list-timers 'ccplan-*' --all --no-pager
+  0 timers listed.
+  ```
+
+### E. Reflection & learnings
+- Build scripts are a real dependency boundary. Including the derive parser directly would make the
+  build script compile unrelated domain/runtime modules, so a small command builder plus a parity test
+  is the lower-blast-radius approach for generated installer artifacts.
+- Tests should assert generated artifact contents, not just command success. The Stage 7 tests check
+  both runtime stdout and the actual `OUT_DIR` files for shell-specific markers.
+- Same-version packages can appear in `cargo tree --duplicates` when a build script uses crates that
+  the runtime graph also uses. `cargo-deny` remains the authoritative multiple-version gate.
+
+### F. Backlog items raised/closed
+- Raised: none.
+- Closed: none.
+
+### G. Acceptance-gate confirmation
+- [x] `clap_complete` + `clap_mangen` added and locked.
+- [x] Build-time bash/zsh/fish/PowerShell completions and `ccplan.1` generated into `OUT_DIR`.
+- [x] Runtime `ccplan completions <shell>` prints generated scripts to stdout.
+- [x] Tests cover every supported shell and generated artifact files.
+- [x] DoD green; notes, checklist, and audit updated.

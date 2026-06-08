@@ -904,7 +904,7 @@ fn status_doctor_and_completions_are_non_interactive() {
     assert!(
         String::from_utf8(run_ok(&context, ["ccplan", "completions", "bash"]))
             .unwrap()
-            .contains("Stage 7")
+            .contains("complete -F")
     );
 }
 

@@ -609,14 +609,14 @@ formatting) stay covered and unit-tested (see Coverage honesty rule + Anti-gamin
 **Preconditions:** Stage 6 gate green.
 
 **Steps:**
-- [ ] Add `clap_complete` + `clap_mangen` as build-deps. Refactor the `clap` command into a file
+- [x] Add `clap_complete` + `clap_mangen` as build-deps. Refactor the `clap` command into a file
       `build.rs` can `include!` (or a `CommandFactory` reachable from build).
-- [ ] `build.rs`: generate bash/zsh/fish/PowerShell completions + `ccplan.1` into `OUT_DIR`.
-- [ ] `ccplan completions <shell>` runtime subcommand (prints to stdout) as a fallback.
-- [ ] Tests: `assert_cmd` — `ccplan completions bash` exits 0 and emits a non-empty script for each shell.
+- [x] `build.rs`: generate bash/zsh/fish/PowerShell completions + `ccplan.1` into `OUT_DIR`.
+- [x] `ccplan completions <shell>` runtime subcommand (prints to stdout) as a fallback.
+- [x] Tests: `assert_cmd` — `ccplan completions bash` exits 0 and emits a non-empty script for each shell.
 
 **Acceptance Gate:**
-- [ ] DoD green. Audit + notes updated.
+- [x] DoD green. Audit + notes updated.
 
 **Commit:** `feat: shell completions and man page generation`
 
@@ -720,14 +720,14 @@ tested agent skill** so agents can install and use `ccplan` — with automated c
 | 4 | CLI surface & command logic | [x] | 83 | 2026-06-08 | `0d816d3` |
 | 5 | Native backends & doctor | [x] | — | 2026-06-08 | `7410f0d` |
 | 6 | run: automation & security | [x] | 128 | 2026-06-08 | `b3ab747` + correction pass (`1add9be`…`cfe8fb3`) |
-| 7 | Completions & man page | [ ] | | | |
+| 7 | Completions & man page | [x] | 131 | 2026-06-08 | pending commit |
 | 8 | OSS hygiene & release | [ ] | | | |
 | 9 | Production readiness & ship | [ ] | | | |
 
-> **Handoff note (2026-06-08):** Stages 0–6 implemented; full DoD gate green on Linux
-> (128 passed / 0 failed / 0 filtered out, 1 sanctioned ignored test; 100% line+function coverage;
+> **Handoff note (2026-06-08):** Stages 0–7 implemented; full DoD gate green on Linux
+> (131 passed / 0 failed / 0 filtered out, 1 sanctioned ignored test; 100% line+function coverage;
 > clippy/deny/fmt clean; anti-gaming guards #1+#2 pass). All P1 backlog items resolved (B-006/007/008/
-> 011/012/014). **Next: Stage 7 (completions & man page).** Per-stage "Tests (passed)" was not
+> 011/012/014). **Next: Stage 8 (OSS hygiene, agent skill, release engineering).** Per-stage "Tests (passed)" was not
 > recorded for stages 1/2/3/5 by earlier sessions (`—`); the cumulative total is authoritative and
 > lives in the latest `audit_log.md` entry. `schtasks.rs`/`launchd.rs` are CI-verified only (don't
 > compile on the Linux dev box).

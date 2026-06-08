@@ -1,3 +1,5 @@
+use std::fs;
+
 use assert_cmd::Command;
 use assert_fs::TempDir;
 use ccplan::cli::Shell;
@@ -26,6 +28,72 @@ fn completion_shells_display_clap_values() {
     assert_eq!(Shell::Zsh.to_string(), "zsh");
     assert_eq!(Shell::Fish.to_string(), "fish");
     assert_eq!(Shell::Powershell.to_string(), "powershell");
+}
+
+#[test]
+fn completions_emit_real_scripts_for_each_shell() {
+    let temp = TempDir::new().unwrap();
+    for (shell, needle) in [
+        ("bash", "complete -F"),
+        ("zsh", "#compdef ccplan"),
+        ("fish", "complete -c ccplan"),
+        ("powershell", "Register-ArgumentCompleter"),
+    ] {
+        let assert = ccplan(&temp)
+            .args(["completions", shell])
+            .assert()
+            .success();
+        let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+        assert!(
+            stdout.len() > 100,
+            "{shell} completions should contain a generated script, got {stdout:?}",
+        );
+        assert!(
+            stdout.contains("ccplan"),
+            "{shell} completions should mention the ccplan binary",
+        );
+        assert!(
+            stdout.contains(needle),
+            "{shell} completions should contain {needle:?}, got {stdout:?}",
+        );
+        assert!(
+            !stdout.contains("generated in Stage 7"),
+            "{shell} completions should not be the pre-Stage-7 placeholder",
+        );
+    }
+}
+
+#[test]
+fn build_script_generates_completion_and_man_artifacts() {
+    for (name, path, needle) in [
+        ("bash", env!("CCPLAN_COMPLETION_BASH"), "complete -F"),
+        ("zsh", env!("CCPLAN_COMPLETION_ZSH"), "#compdef ccplan"),
+        ("fish", env!("CCPLAN_COMPLETION_FISH"), "complete -c ccplan"),
+        (
+            "powershell",
+            env!("CCPLAN_COMPLETION_POWERSHELL"),
+            "Register-ArgumentCompleter",
+        ),
+    ] {
+        let contents = fs::read_to_string(path).unwrap();
+        assert!(
+            contents.len() > 100,
+            "{name} generated artifact should be non-empty at {path}",
+        );
+        assert!(
+            contents.contains("ccplan"),
+            "{name} generated artifact should mention ccplan",
+        );
+        assert!(
+            contents.contains(needle),
+            "{name} generated artifact should contain {needle:?}",
+        );
+    }
+
+    let manpage = fs::read_to_string(env!("CCPLAN_MANPAGE")).unwrap();
+    assert!(manpage.len() > 100);
+    assert!(manpage.contains(".TH"));
+    assert!(manpage.contains("ccplan"));
 }
 
 #[test]

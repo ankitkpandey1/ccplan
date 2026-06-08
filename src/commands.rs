@@ -8,13 +8,15 @@ use std::{
     path::Path,
 };
 
+use clap::CommandFactory;
+use clap_complete::shells::{Bash, Fish, PowerShell, Zsh};
 use jiff::{SignedDuration, Timestamp};
 use serde::Serialize;
 
 use crate::{
     cli::{
-        AddArgs, AgendaArgs, ApplyArgs, ClearArgs, Commands, EditArgs, FireArgs, ReadArgs, SetArgs,
-        Shell,
+        AddArgs, AgendaArgs, ApplyArgs, ClearArgs, Cli, Commands, EditArgs, FireArgs, ReadArgs,
+        SetArgs, Shell,
     },
     config::AutomationConfig,
     context::{ContextRefs, Notification, Scheduler},
@@ -50,7 +52,10 @@ pub fn dispatch(
         Some(Commands::Fire(args)) => fire(&args, out, context),
         Some(Commands::Status) => status(out, context),
         Some(Commands::Doctor) => doctor(out, context),
-        Some(Commands::Completions(args)) => completions(args.shell, out),
+        Some(Commands::Completions(args)) => {
+            completions(args.shell, out);
+            Ok(())
+        }
     }
 }
 
@@ -378,9 +383,14 @@ fn doctor(out: &mut dyn Write, context: &ContextRefs<'_>) -> Result<()> {
     Ok(())
 }
 
-fn completions(shell: Shell, out: &mut dyn Write) -> Result<()> {
-    writeln!(out, "# {shell} completions are generated in Stage 7")?;
-    Ok(())
+fn completions(shell: Shell, out: &mut dyn Write) {
+    let mut command = Cli::command();
+    match shell {
+        Shell::Bash => clap_complete::generate(Bash, &mut command, "ccplan", out),
+        Shell::Zsh => clap_complete::generate(Zsh, &mut command, "ccplan", out),
+        Shell::Fish => clap_complete::generate(Fish, &mut command, "ccplan", out),
+        Shell::Powershell => clap_complete::generate(PowerShell, &mut command, "ccplan", out),
+    }
 }
 
 fn read_plan_input(source: &str) -> Result<String> {

@@ -8,6 +8,8 @@
 use std::{io::Write, path::PathBuf};
 
 pub mod cli;
+#[cfg(test)]
+mod cli_command;
 mod commands;
 pub mod config;
 pub mod context;

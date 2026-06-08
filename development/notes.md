@@ -60,6 +60,7 @@ rust-version = "1.85"            # MSRV; edition 2024 stabilized in 1.85
 
 [dependencies]
 clap          = { version = "4", features = ["derive"] }
+clap_complete = "4"
 toml          = "1"
 serde         = { version = "1", features = ["derive"] }
 serde_json    = "1"
@@ -79,17 +80,15 @@ notify-rust   = { version = "4", default-features = false, features = ["d_vendor
 # during Stage 5.
 
 [build-dependencies]
-clap          = { version = "4", features = ["derive"] }
+clap          = "4"
 clap_complete = "4"
-clap_mangen   = "0.2"
+clap_mangen   = "0.3"
 
 [dev-dependencies]
 assert_cmd    = "2"
 assert_fs     = "1"
 predicates    = "3"
-tempfile      = "3"
-insta         = { version = "1", features = ["json", "redactions"] }
-proptest      = "1"
+proptest      = { version = "1", default-features = false, features = ["std"] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage,coverage_nightly)'] }
@@ -456,3 +455,15 @@ Tooling (installed in CI, not deps): `cargo-llvm-cov`, `cargo-deny`, `cargo-dist
   a test that drives the missing branch (mutation against an absent plan → NotFound).
 - **zsh `noclobber`**: `cmd > file` errors if `file` exists; use `rm -f` first (or `>|`) when
   capturing gate output to a temp file, or the stale file misleads.
+
+### 2026-06-08 — Stage 7 completions + man page
+- Runtime `ccplan completions <shell>` now uses `Cli::command()` plus `clap_complete`, so the fallback
+  subcommand is generated from the actual derive parser instead of a placeholder.
+- `build.rs` generates bash, zsh, fish, PowerShell, and `ccplan.1` into Cargo's `OUT_DIR`. It exposes
+  the generated paths through compile-time env vars that integration tests read back and verify.
+- Build-time artifacts use `src/cli_command.rs`, a lightweight `clap::Command` builder included by
+  `build.rs`. Including the derive parser directly would pull domain models, lifecycle parsing, and
+  their dependency graph into the build script; the builder keeps build-time generation narrow.
+- To prevent the builder from drifting, the library unit test compares its subcommands and argument
+  surface (IDs, long flags, positional indexes, requiredness) against the derive parser.
+- Dependency note: `clap_mangen` resolved to 0.3.0 and is compatible with the Rust 1.85 MSRV gate.
