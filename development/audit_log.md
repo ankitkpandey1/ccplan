@@ -9,6 +9,12 @@
 > **Rules:**
 > - Write the entry only when the stage's Acceptance Gate is truly green. Paste **real command output**
 >   as evidence (don't summarize "tests pass" — show the counts and the coverage %).
+> - **Test-count guard (mandatory):** paste the full `test result:` line(s) verbatim. The entry must
+>   show `0 failed`, **`0 filtered out`** (gate run with no name filter / no `--skip`), and a `passed`
+>   total `≥` the previous stage's recorded count. State the total and confirm it did not drop. From
+>   Stage 5 on, also paste the `cargo test -- --ignored` run's summary (the real-OS integration tests
+>   must actually run and pass — `#[ignore]` is not "skipped"). A green exit code with zero/fewer tests
+>   is a **failed** gate; do not write a passing entry for it.
 > - Be honest. If something is partial, deferred, or excluded, say so and link the `backlog.md` item.
 > - Confirm the stage's checklist boxes one by one.
 > - Append newest entry at the **bottom**. Never rewrite past entries (immutable history, like the product).
@@ -35,7 +41,9 @@
 ### D. Evidence (paste real output)
 - `cargo fmt --all -- --check`            → <result>
 - `cargo clippy --all-targets --all-features -- -D warnings`  → <result>
-- `cargo test --all-features --workspace` → <N passed; 0 failed>
+- `cargo test --all-features --workspace` → paste the full `test result:` line(s): must be
+  `<N> passed; 0 failed; <K> ignored; … 0 filtered out`. State the total N and confirm N ≥ previous
+  stage's count (Test-count guard). (Stage 5+: also paste `cargo test -- --ignored` → `<M> passed; 0 failed`.)
 - `RUSTFLAGS="--cfg coverage_nightly" cargo +nightly llvm-cov --all-features --workspace --fail-under-lines 100` → <coverage %; pass>
 - `cargo deny check`                      → <result>
 - (Stage 0+) CI run link + status on ubuntu/macos/windows.

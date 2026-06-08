@@ -96,7 +96,7 @@ Run from repo root. All must succeed (exit 0) before a stage is "done":
 ```sh
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-features --workspace
+cargo test --all-features --workspace                                       # run with NO name filter / NO --skip; see Test-count guard
 RUSTFLAGS="--cfg coverage_nightly" cargo +nightly llvm-cov --all-features --workspace --fail-under-lines 100   # cfg makes coverage(off) exclusions apply
 cargo deny check                                                            # licenses + advisories + bans
 cargo build --release                                                       # binary builds
@@ -105,6 +105,29 @@ cargo build --release                                                       # bi
 If any tool isn't installed yet: `cargo install cargo-llvm-cov cargo-deny` and add the nightly
 toolchain (`rustup toolchain install nightly --component llvm-tools-preview`). Stage 0 wires these
 into CI so the gate runs automatically on every push.
+
+> **Test-count guard (the gate is NOT "exit 0" — it's "tests actually ran and passed").**
+> `cargo test` exits **0 even when zero tests run** (everything `#[ignore]`d, everything filtered, or a
+> `--skip` that matches all). Exit code alone is therefore *not* proof. Every stage's test run must
+> satisfy **all** of these, verified from the `test result:` summary line(s):
+> 1. **`0 failed`** in every binary's summary — no failures anywhere.
+> 2. **`0 filtered out`** — you ran the gate with **no name filter and no `--skip`**. A non-zero
+>    "filtered out" means tests were silently excluded; the gate does **not** count.
+> 3. **`passed ≥ 1`, and the total passed count is `≥` the previous stage's recorded count**
+>    (test count is monotonically non-decreasing — every stage adds tests, never loses them). Record
+>    the exact total in the audit entry and the Progress tracker's **Tests** column; a drop is a
+>    **STOP-and-investigate** (someone deleted/`#[ignore]`d/renamed-away a test).
+> 4. **`ignored` is accounted for.** The only legitimately `#[ignore]`d tests are the sanctioned
+>    real-OS integration tests (Stage 5, `tests/integration_*.rs`). They are not skipped — they run in
+>    a dedicated per-OS CI job via `cargo test --all-features -- --ignored` (or `--include-ignored`),
+>    which must itself report `0 failed` and a non-zero passed count. Paste **both** summary lines
+>    (default run + ignored run) in the Stage 5+ audit entries. `#[ignore]` for any other reason is
+>    forbidden — if a test is flaky or slow, fix it or raise a `backlog.md` item, never silence it.
+>
+> CI enforces the same: the test job runs the gate with no filter, and a guard step fails the build if
+> the run reports `0 filtered out` is violated or the passed count is `0`. Wire this into Stage 0's
+> CI (a small `grep`/script over the test output, or `cargo test … 2>&1 | tee` + assertion) and keep
+> it green thereafter.
 
 > **Coverage honesty rule:** the only code allowed to be excluded from coverage is (a) platform
 > `#[cfg(target_os=…)]` real-backend modules, (b) the real shell-out/native-API impls of `Scheduler`/
@@ -249,6 +272,14 @@ cc-planner/
   `RUSTFLAGS="--cfg coverage_nightly" cargo +nightly llvm-cov --fail-under-lines 100` each stage so the
   number never regresses. The only legitimate exclusions are listed in the DoD gate's
   coverage-honesty rule.
+- **Tests must actually run — assert the count, never trust the exit code.** Per the DoD **Test-count
+  guard**: the gate is run with **no name filter and no `--skip`**; the `test result:` line must show
+  `0 failed`, **`0 filtered out`**, and `passed ≥ 1` with the total `≥` the previous stage. Record the
+  count each stage. A green exit with zero (or fewer) tests is a **failed** gate, not a pass.
+- **`#[ignore]` is reserved for the sanctioned real-OS integration tests only** (`tests/integration_*.rs`,
+  Stage 5), which are not skipped — they run in a dedicated per-OS CI job via `cargo test -- --ignored`
+  that must itself report `0 failed` and non-zero passed. Never `#[ignore]` a test to dodge a failure or
+  a slow path; fix it or file a `backlog.md` item.
 
 ---
 
@@ -610,15 +641,18 @@ tested agent skill** so agents can install and use `ccplan` — with automated c
 
 ## 📍 Progress tracker (update as you go)
 
-| Stage | Title | Done | Audit entry | Commit |
-|------:|-------|:----:|:-----------:|--------|
-| 0 | Repo/toolchain/CI bootstrap | [ ] | | |
-| 1 | Domain model & TOML schema | [ ] | | |
-| 2 | Time, Clock, lifecycle logic | [ ] | | |
-| 3 | Storage layer | [ ] | | |
-| 4 | CLI surface & command logic | [ ] | | |
-| 5 | Native backends & doctor | [ ] | | |
-| 6 | run: automation & security | [ ] | | |
-| 7 | Completions & man page | [ ] | | |
-| 8 | OSS hygiene & release | [ ] | | |
-| 9 | Production readiness & ship | [ ] | | |
+`Tests` = total `passed` from the gate's `test result:` line(s) (must be non-decreasing; `0 failed`,
+`0 filtered out` — see the Test-count guard).
+
+| Stage | Title | Done | Tests (passed) | Audit entry | Commit |
+|------:|-------|:----:|:--------------:|:-----------:|--------|
+| 0 | Repo/toolchain/CI bootstrap | [ ] | 2 | | |
+| 1 | Domain model & TOML schema | [ ] | | | |
+| 2 | Time, Clock, lifecycle logic | [ ] | | | |
+| 3 | Storage layer | [ ] | | | |
+| 4 | CLI surface & command logic | [ ] | | | |
+| 5 | Native backends & doctor | [ ] | | | |
+| 6 | run: automation & security | [ ] | | | |
+| 7 | Completions & man page | [ ] | | | |
+| 8 | OSS hygiene & release | [ ] | | | |
+| 9 | Production readiness & ship | [ ] | | | |
