@@ -564,30 +564,25 @@ fn next_temp_suffix() -> u64 {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+    use assert_fs::TempDir;
 
     #[test]
     fn atomic_write_replaces_existing_file() {
-        let path = std::env::temp_dir().join(format!(
-            "ccplan-store-{}-{}.json",
-            std::process::id(),
-            next_temp_suffix()
-        ));
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("ledger.json");
 
         atomic_write(&path, b"one").expect("initial atomic write should succeed");
         atomic_write(&path, b"two").expect("replacement atomic write should succeed");
 
         assert_eq!(fs::read(&path).unwrap(), b"two");
-        fs::remove_file(&path).unwrap();
+    }
 
-        let relative_path = PathBuf::from(format!(
-            ".ccplan-store-{}-{}.json",
-            std::process::id(),
-            next_temp_suffix()
-        ));
-
-        atomic_write(&relative_path, b"relative").expect("relative atomic write should succeed");
-
-        assert_eq!(fs::read(&relative_path).unwrap(), b"relative");
-        fs::remove_file(&relative_path).unwrap();
+    #[test]
+    fn ensure_parent_treats_empty_parent_as_current_dir() {
+        // A bare filename has an empty parent; ensure_parent must fall back to "." rather than
+        // erroring. `create_dir_all(".")` is a no-op on the existing CWD, so this writes nothing
+        // (no temp-dir use, no CWD pollution) while still exercising the empty-parent branch.
+        ensure_parent(Path::new("bare-name-with-no-parent.json"))
+            .expect("empty parent should resolve to the current directory");
     }
 }
