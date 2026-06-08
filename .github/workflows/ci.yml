@@ -59,7 +59,7 @@ jobs:
           cargo +nightly llvm-cov --all-features --workspace --fail-under-lines 100
           --codecov --output-path codecov.json
       - name: Upload coverage
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           files: codecov.json
           fail_ci_if_error: true

@@ -228,6 +228,9 @@ Tooling (installed in CI, not deps): `cargo-llvm-cov`, `cargo-deny`, `cargo-dist
   `cargo llvm-cov` run under pinned stable even after `dtolnay/rust-toolchain@nightly`; use
   `cargo +nightly llvm-cov` in CI. Windows checkout converted Rust files to CRLF, which violated
   `newline_style = "Unix"`; `.gitattributes` now forces LF.
+- The original pinned CI note said `codecov/codecov-action@v5`; the current Codecov README documents
+  `v7` with a wrapper/key update. The v5 upload failed in CI because the uploader signature key could
+  not be verified, so Stage 0 uses `codecov/codecov-action@v7`.
 
 ### 2026-06-08 — review round 4 fixes + agent skill (D20)
 - Final-v1 → version/tag/artifacts are **v1.0.0** (was v0.1.0) everywhere.
