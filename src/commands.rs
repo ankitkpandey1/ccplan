@@ -203,7 +203,7 @@ fn show(args: ReadArgs, out: &mut dyn Write, context: &ContextRefs<'_>) -> Resul
 
 fn now(args: ReadArgs, out: &mut dyn Write, context: &ContextRefs<'_>) -> Result<()> {
     let date = args.date.unwrap_or_else(|| today(context));
-    let plan = reconciled_plan(context, &date)?;
+    let plan = read_reconciled_plan(context, &date)?;
     let now = context.clock.now().timestamp();
     let mut blocks = Vec::new();
     for block in &plan.blocks {
@@ -216,12 +216,12 @@ fn now(args: ReadArgs, out: &mut dyn Write, context: &ContextRefs<'_>) -> Result
             blocks.push(BlockSummary::from_block(block));
         }
     }
-    write_read_array(out, args.json, &blocks)
+    write_read_rows(out, args.json, &blocks, "no active blocks right now")
 }
 
 fn next(args: ReadArgs, out: &mut dyn Write, context: &ContextRefs<'_>) -> Result<()> {
     let date = args.date.unwrap_or_else(|| today(context));
-    let plan = reconciled_plan(context, &date)?;
+    let plan = read_reconciled_plan(context, &date)?;
     let now = context.clock.now().timestamp();
     let mut candidates = Vec::new();
     for block in &plan.blocks {
@@ -234,18 +234,23 @@ fn next(args: ReadArgs, out: &mut dyn Write, context: &ContextRefs<'_>) -> Resul
         }
     }
     let Some(next_start) = candidates.iter().map(|(start, _)| *start).min() else {
-        return write_read_array(out, args.json, &Vec::<BlockSummary>::new());
+        return write_read_rows(
+            out,
+            args.json,
+            &Vec::<BlockSummary>::new(),
+            "no upcoming blocks today",
+        );
     };
     let blocks = candidates
         .into_iter()
         .filter_map(|(start, block)| (start == next_start).then_some(block))
         .collect::<Vec<_>>();
-    write_read_array(out, args.json, &blocks)
+    write_read_rows(out, args.json, &blocks, "no upcoming blocks today")
 }
 
 fn agenda(args: AgendaArgs, out: &mut dyn Write, context: &ContextRefs<'_>) -> Result<()> {
     let date = args.date.unwrap_or_else(|| today(context));
-    let plan = reconciled_plan(context, &date)?;
+    let plan = read_reconciled_plan(context, &date)?;
     let now = context.clock.now().timestamp();
     let mut blocks = Vec::new();
     for block in &plan.blocks {
@@ -260,12 +265,18 @@ fn agenda(args: AgendaArgs, out: &mut dyn Write, context: &ContextRefs<'_>) -> R
         let starts_in_seconds = start.duration_since(now).as_secs();
         blocks.push(AgendaEntry::new(block, starts_in_seconds));
     }
-    write_read_array(out, args.json, &blocks)
+    write_read_rows(out, args.json, &blocks, "nothing left on today's agenda")
 }
 
 fn apply(args: ApplyArgs, out: &mut dyn Write, context: &ContextRefs<'_>) -> Result<()> {
     let date = args.date.unwrap_or_else(|| today(context));
-    let plan = reconciled_plan(context, &date)?;
+    // `apply` is a mutation point and persists overdue reconciliation; `--dry-run` is a preview and
+    // must stay side-effect-free, so it reconciles in memory only (Inv-18).
+    let plan = if args.dry_run {
+        read_reconciled_plan(context, &date)?
+    } else {
+        reconciled_plan(context, &date)?
+    };
     let desired = desired_triggers(&plan, context.clock.now().timestamp())?;
     let store = context.store;
     let scheduler = context.scheduler;
@@ -440,14 +451,16 @@ fn persist_plan(context: &ContextRefs<'_>, plan: &Plan) -> Result<()> {
         .map_err(Error::from)
 }
 
-fn reconciled_plan(context: &ContextRefs<'_>, date: &PlanDate) -> Result<Plan> {
-    let mut plan = load_required(context.store, date, context.config.notify.default_lead)?;
+/// Applies overdue→`missed`/`expired` reconciliation transitions to `plan` in memory.
+///
+/// Returns whether anything changed. This is the shared, side-effect-free core: it never touches
+/// the store, so callers decide whether to persist (Inv-18: reads don't; `apply`/mutations do).
+fn apply_overdue_in_memory(context: &ContextRefs<'_>, plan: &mut Plan) -> Result<bool> {
     let now = context.clock.now().timestamp();
-    let updates = reconcile_overdue(&plan, now, context.policy.grace())?;
+    let updates = reconcile_overdue(plan, now, context.policy.grace())?;
     if updates.is_empty() {
-        return Ok(plan);
+        return Ok(false);
     }
-
     let by_id = updates
         .into_iter()
         .map(|update| (update.id, update.status))
@@ -457,7 +470,29 @@ fn reconciled_plan(context: &ContextRefs<'_>, date: &PlanDate) -> Result<Plan> {
             block.status = *status;
         }
     }
-    persist_plan(context, &plan)?;
+    Ok(true)
+}
+
+/// Loads a plan and reconciles overdue blocks **in memory only** (Inv-18).
+///
+/// Used by the read commands (`now`/`next`/`agenda`): a query must never write, must never take the
+/// store's write lock, and must leave the plan file byte-identical — so it can't fail with "store
+/// locked" against a concurrent writer, and reading never mutates history.
+fn read_reconciled_plan(context: &ContextRefs<'_>, date: &PlanDate) -> Result<Plan> {
+    let mut plan = load_required(context.store, date, context.config.notify.default_lead)?;
+    apply_overdue_in_memory(context, &mut plan)?;
+    Ok(plan)
+}
+
+/// Loads, reconciles overdue blocks, and **persists** the result if anything changed.
+///
+/// Used by `apply`, which is a legitimate mutation point. Only writes when reconciliation actually
+/// changed a status, so a no-op `apply` leaves the file untouched.
+fn reconciled_plan(context: &ContextRefs<'_>, date: &PlanDate) -> Result<Plan> {
+    let mut plan = load_required(context.store, date, context.config.notify.default_lead)?;
+    if apply_overdue_in_memory(context, &mut plan)? {
+        persist_plan(context, &plan)?;
+    }
     Ok(plan)
 }
 
@@ -553,19 +588,102 @@ fn write_reconcile_summary(out: &mut dyn Write, changes: &[ReconcileChange]) -> 
     Ok(())
 }
 
-fn write_read_array<T>(out: &mut dyn Write, json: bool, values: &[T]) -> Result<()>
+/// Writes a list of read-command results: machine `--json`, or a scannable human table.
+///
+/// The human path renders an aligned, headed table (DESIGN "don't make me think" UX) so `now`/
+/// `next`/`agenda` are usable without `--json`; an empty result prints a plain-language line rather
+/// than `[]`.
+fn write_read_rows<T>(
+    out: &mut dyn Write,
+    json: bool,
+    values: &[T],
+    empty_message: &str,
+) -> Result<()>
 where
-    T: Serialize,
+    T: Serialize + HumanRow,
 {
     if json {
         serde_json::to_writer_pretty(&mut *out, values)?;
         writeln!(out)?;
-    } else if values.is_empty() {
-        writeln!(out, "[]")?;
-    } else {
-        writeln!(out, "{} item(s)", values.len())?;
+        return Ok(());
+    }
+    if values.is_empty() {
+        writeln!(out, "{empty_message}")?;
+        return Ok(());
+    }
+    let rows = values.iter().map(HumanRow::columns).collect::<Vec<_>>();
+    write_table(out, T::header(), &rows)
+}
+
+/// A row renderable as a human table: a static header and one cell string per column.
+trait HumanRow {
+    fn header() -> &'static [&'static str];
+    fn columns(&self) -> Vec<String>;
+}
+
+/// Renders `rows` under `header` as a left-aligned, column-padded table. Pure (tested).
+fn write_table(out: &mut dyn Write, header: &[&str], rows: &[Vec<String>]) -> Result<()> {
+    let mut widths = header
+        .iter()
+        .map(|cell| cell.chars().count())
+        .collect::<Vec<_>>();
+    for row in rows {
+        for (index, cell) in row.iter().enumerate() {
+            widths[index] = widths[index].max(cell.chars().count());
+        }
+    }
+    let header_cells = header
+        .iter()
+        .map(|cell| (*cell).to_owned())
+        .collect::<Vec<_>>();
+    writeln!(out, "{}", format_table_row(&header_cells, &widths))?;
+    for row in rows {
+        writeln!(out, "{}", format_table_row(row, &widths))?;
     }
     Ok(())
+}
+
+/// Pads every cell but the last to its column width (two-space gutter); trims trailing space.
+fn format_table_row(cells: &[String], widths: &[usize]) -> String {
+    let last = cells.len().saturating_sub(1);
+    let mut line = String::new();
+    for (index, cell) in cells.iter().enumerate() {
+        if index == last {
+            line.push_str(cell);
+        } else {
+            let _ = write!(line, "{cell:<width$}  ", width = widths[index]);
+        }
+    }
+    line.truncate(line.trim_end().len());
+    line
+}
+
+/// Human label for a block status (lowercase, stable across the human read commands).
+fn status_label(status: Status) -> &'static str {
+    match status {
+        Status::Pending => "pending",
+        Status::Active => "active",
+        Status::Done => "done",
+        Status::Skipped => "skipped",
+        Status::Missed => "missed",
+        Status::Expired => "expired",
+    }
+}
+
+/// Renders a non-negative seconds-until-start countdown as a compact human string. Pure (tested).
+fn humanize_countdown(seconds: i64) -> String {
+    if seconds <= 0 {
+        return "now".to_owned();
+    }
+    let hours = seconds / 3_600;
+    let minutes = (seconds % 3_600) / 60;
+    if hours > 0 {
+        format!("in {hours}h{minutes:02}m")
+    } else if minutes > 0 {
+        format!("in {minutes}m")
+    } else {
+        format!("in {seconds}s")
+    }
 }
 
 fn send_notification(context: &ContextRefs<'_>, block: &Block) -> std::result::Result<(), String> {
@@ -1031,6 +1149,21 @@ impl BlockSummary {
     }
 }
 
+impl HumanRow for BlockSummary {
+    fn header() -> &'static [&'static str] {
+        &["TIME", "STATUS", "ID", "TITLE"]
+    }
+
+    fn columns(&self) -> Vec<String> {
+        vec![
+            format!("{}-{}", self.start, self.end),
+            status_label(self.status).to_owned(),
+            self.id.clone(),
+            self.title.clone(),
+        ]
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct AgendaEntry {
     #[serde(flatten)]
@@ -1044,6 +1177,81 @@ impl AgendaEntry {
             block: BlockSummary::from_block(block),
             starts_in_seconds,
         }
+    }
+}
+
+impl HumanRow for AgendaEntry {
+    fn header() -> &'static [&'static str] {
+        &["TIME", "IN", "STATUS", "ID", "TITLE"]
+    }
+
+    fn columns(&self) -> Vec<String> {
+        vec![
+            format!("{}-{}", self.block.start, self.block.end),
+            humanize_countdown(self.starts_in_seconds),
+            status_label(self.block.status).to_owned(),
+            self.block.id.clone(),
+            self.block.title.clone(),
+        ]
+    }
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod read_output_tests {
+    use super::{
+        HumanRow, Status, format_table_row, humanize_countdown, status_label, write_table,
+    };
+
+    #[test]
+    fn humanize_countdown_covers_each_unit_branch() {
+        assert_eq!(humanize_countdown(0), "now");
+        assert_eq!(humanize_countdown(-5), "now");
+        assert_eq!(humanize_countdown(45), "in 45s");
+        assert_eq!(humanize_countdown(120), "in 2m");
+        assert_eq!(humanize_countdown(3_600), "in 1h00m");
+        assert_eq!(humanize_countdown(3_600 + 5 * 60), "in 1h05m");
+    }
+
+    #[test]
+    fn status_label_covers_every_status() {
+        assert_eq!(status_label(Status::Pending), "pending");
+        assert_eq!(status_label(Status::Active), "active");
+        assert_eq!(status_label(Status::Done), "done");
+        assert_eq!(status_label(Status::Skipped), "skipped");
+        assert_eq!(status_label(Status::Missed), "missed");
+        assert_eq!(status_label(Status::Expired), "expired");
+    }
+
+    #[test]
+    fn table_aligns_columns_and_trims_trailing_space() {
+        // A short cell is padded to its column width; the final column is never padded, so no row
+        // carries trailing whitespace.
+        let widths = [5, 3];
+        assert_eq!(
+            format_table_row(&["ab".to_owned(), "x".to_owned()], &widths),
+            "ab     x"
+        );
+        assert_eq!(
+            format_table_row(&["abcde".to_owned(), String::new()], &widths),
+            "abcde"
+        );
+
+        let mut out = Vec::new();
+        write_table(
+            &mut out,
+            &["ID", "TITLE"],
+            &[vec!["a".to_owned(), "Alpha".to_owned()]],
+        )
+        .unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(text, "ID  TITLE\na   Alpha\n");
+    }
+
+    #[test]
+    fn agenda_entry_row_includes_countdown_column() {
+        let header = <super::AgendaEntry as HumanRow>::header();
+        assert_eq!(header, &["TIME", "IN", "STATUS", "ID", "TITLE"]);
     }
 }
 

@@ -326,7 +326,7 @@ fn add_edit_and_status_errors_cover_conflict_paths() {
 }
 
 #[test]
-fn read_queries_return_json_arrays_and_reconcile_overdue_blocks() {
+fn read_queries_reconcile_in_memory_without_persisting_and_apply_persists() {
     let (_temp, context) = test_context_at("2026-06-08T11:10:00+05:30[Asia/Kolkata]");
     let mut plan = plan();
     plan.blocks[0].status = Status::Active;
@@ -369,16 +369,28 @@ fn read_queries_return_json_arrays_and_reconcile_overdue_blocks() {
             .any(|block| block["id"] == "lunch")
     );
 
-    let stored = context.store.load_plan(&date()).unwrap().unwrap();
-    assert_eq!(
-        stored
+    // Inv-18: the three reads above reconciled the overdue `stale` block in memory only — the
+    // stored plan is byte-for-byte unchanged, so `stale` keeps its on-disk Pending status.
+    let stale_status = |store: &Store| {
+        store
+            .load_plan(&date())
+            .unwrap()
+            .unwrap()
             .blocks
-            .iter()
+            .into_iter()
             .find(|block| block.id.as_str() == "stale")
             .unwrap()
-            .status,
-        Status::Missed
-    );
+            .status
+    };
+    assert_eq!(stale_status(&context.store), Status::Pending);
+
+    // A dry-run apply is also a preview and must not persist reconciliation.
+    run_ok(&context, ["ccplan", "apply", "--dry-run"]);
+    assert_eq!(stale_status(&context.store), Status::Pending);
+
+    // A real `apply` is a mutation point and DOES persist the overdue reconciliation.
+    run_ok(&context, ["ccplan", "apply"]);
+    assert_eq!(stale_status(&context.store), Status::Missed);
 }
 
 #[test]
@@ -394,8 +406,42 @@ fn human_read_outputs_cover_empty_and_non_empty_arrays() {
     let agenda = String::from_utf8(run_ok(&context, ["ccplan", "agenda"])).unwrap();
 
     assert!(show.contains("[[block]]"));
-    assert_eq!(now.trim(), "[]");
-    assert_eq!(agenda.trim(), "2 item(s)");
+    // At 10:00 nothing is active: empty reads print plain language, not "[]".
+    assert_eq!(now.trim(), "no active blocks right now");
+    // The agenda renders a scannable, headed human table (not "N item(s)"), with countdowns.
+    assert!(agenda.contains("TIME"));
+    assert!(agenda.contains("IN"));
+    assert!(agenda.contains("STATUS"));
+    assert!(agenda.contains("11:00-11:30"));
+    assert!(agenda.contains("in 1h00m"));
+    assert!(agenda.contains("focus"));
+    assert!(agenda.contains("Focus time"));
+    assert!(agenda.contains("in 4h00m"));
+    assert!(agenda.contains("Lunch"));
+    assert!(agenda.contains("pending"));
+
+    // A read must not have persisted anything: reconciliation here is in-memory only (Inv-18).
+    let after_reads = std::fs::read(context.store.plan_path(&date())).unwrap();
+    let _ = String::from_utf8(run_ok(&context, ["ccplan", "agenda"])).unwrap();
+    assert_eq!(
+        std::fs::read(context.store.plan_path(&date())).unwrap(),
+        after_reads,
+        "read commands must leave the plan file byte-identical"
+    );
+
+    // Active-block human output (a separate context where `focus` is in progress).
+    let (_temp_active, active) = test_context_at("2026-06-08T11:15:00+05:30[Asia/Kolkata]");
+    let mut active_plan = plan();
+    active_plan.blocks[0].status = Status::Active;
+    active
+        .store
+        .set_plan(&active_plan, HistoryPolicy::Preserve)
+        .unwrap();
+    let now_active = String::from_utf8(run_ok(&active, ["ccplan", "now"])).unwrap();
+    assert!(now_active.contains("focus"));
+    assert!(now_active.contains("Focus time"));
+    assert!(now_active.contains("active"));
+    assert!(now_active.contains("11:00-11:30"));
 
     let finished = Plan {
         date: date(),
