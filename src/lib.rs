@@ -10,6 +10,7 @@ use std::io::Write;
 pub mod cli;
 pub mod lifecycle;
 pub mod model;
+pub mod store;
 pub mod time;
 
 /// Runs a parsed `ccplan` invocation.

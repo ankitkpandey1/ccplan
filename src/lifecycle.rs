@@ -1,13 +1,15 @@
 //! Pure lifecycle/fire decision logic.
 
 use jiff::{SignedDuration, Timestamp};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     model::{Block, BlockId, Plan, Status},
     time::{TimeError, resolve_block_end, resolve_block_start},
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Event {
     Notify,
     Start,
