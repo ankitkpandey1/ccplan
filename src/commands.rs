@@ -754,8 +754,10 @@ fn log_notify(context: &ContextRefs<'_>, block: &Block, log_line: &mut String) {
 
 fn notification_for(block: &Block) -> Notification {
     Notification {
+        // The title already carries the human-readable block name, so the body need not repeat the
+        // slug `id` (which rendered as e.g. "future-focus at 11:00" — redundant and machine-looking).
         title: block.title.clone(),
-        body: format!("{} at {}", block.id, block.start),
+        body: format!("at {}", block.start),
     }
 }
 

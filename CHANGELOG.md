@@ -16,6 +16,9 @@ This project follows Keep a Changelog and uses Semantic Versioning.
 - **`fire --dry-run` is now genuinely read-only.** It previews the decision a real fire would take
   without recording the at-most-once ledger entry, sending a notification, persisting the block's
   status, or writing a fire-log entry — matching the side-effect-free contract of `apply --dry-run`.
+- **Notification body no longer repeats the block slug `id`.** The toast title already carries the
+  human block name, so the body dropped the redundant machine slug (it rendered e.g.
+  "future-focus at 11:00") and now shows only the start time ("at 11:00").
 
 ### Changed
 

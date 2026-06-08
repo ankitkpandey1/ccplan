@@ -1529,6 +1529,35 @@ fn test_fire_dry_run_leaves_ledger_untouched_so_real_fire_still_fires() {
 }
 
 #[test]
+fn fire_notification_body_omits_the_slug_id() {
+    // The notification title carries the human block name; the body must not repeat the machine
+    // slug `id` (it used to render "focus at 11:00", which read as duplicate/robotic spam next to
+    // the title). The body is just the start time now.
+    let (_temp, context) = test_context_at("2026-06-08T10:55:00+05:30[Asia/Kolkata]");
+    context
+        .store
+        .set_plan(&plan(), HistoryPolicy::Preserve)
+        .unwrap();
+    let rev = focus_rev(&context);
+
+    run_ok(
+        &context,
+        fire_args("focus", "notify", rev.as_str(), "2026-06-08T05:25:00Z"),
+    );
+
+    let notifications = context.notifier.notifications();
+    assert_eq!(notifications.len(), 1);
+    let notification = &notifications[0];
+    assert_eq!(notification.title, "Focus time");
+    assert_eq!(notification.body, "at 11:00");
+    assert!(
+        !notification.body.contains("focus"),
+        "body must not contain the slug id, got {:?}",
+        notification.body
+    );
+}
+
+#[test]
 fn test_automation_truncates_large_output() {
     let (_temp, mut context) = test_context_at("2026-06-08T11:00:00+05:30[Asia/Kolkata]");
     let exe = if cfg!(windows) {
