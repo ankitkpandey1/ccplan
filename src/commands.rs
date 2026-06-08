@@ -1275,16 +1275,32 @@ mod automation_policy_tests {
         }
     }
 
+    // On Windows, a truly absolute path requires a drive letter (e.g. C:\…); Unix-style /bin/echo
+    // is root-relative and Path::is_absolute() returns false. Use platform-specific literals.
+    #[cfg(unix)]
+    const ABS_PATH_A: &str = "/bin/echo";
+    #[cfg(unix)]
+    const ABS_PATH_B: &str = "/bin/true";
+    #[cfg(windows)]
+    const ABS_PATH_A: &str = r"C:\Windows\System32\cmd.exe";
+    #[cfg(windows)]
+    const ABS_PATH_B: &str = r"C:\Windows\System32\notepad.exe";
+    // Fallback for non-unix, non-windows (unsupported tier)
+    #[cfg(not(any(unix, windows)))]
+    const ABS_PATH_A: &str = "/bin/echo";
+    #[cfg(not(any(unix, windows)))]
+    const ABS_PATH_B: &str = "/bin/true";
+
     #[test]
     fn authorize_run_allows_absolute_allowlisted_program() {
-        let config = enabled_with(&["/bin/echo"]);
-        assert!(authorize_run(&config, &["/bin/echo".to_owned(), "hi".to_owned()]).is_ok());
+        let config = enabled_with(&[ABS_PATH_A]);
+        assert!(authorize_run(&config, &[ABS_PATH_A.to_owned(), "hi".to_owned()]).is_ok());
     }
 
     #[test]
     fn authorize_run_refuses_when_disabled() {
         assert_eq!(
-            authorize_run(&AutomationConfig::default(), &["/bin/echo".to_owned()]),
+            authorize_run(&AutomationConfig::default(), &[ABS_PATH_A.to_owned()]),
             Err("automation is disabled".to_owned())
         );
     }
@@ -1310,7 +1326,7 @@ mod automation_policy_tests {
     #[test]
     fn authorize_run_refuses_unlisted_program() {
         assert!(
-            authorize_run(&enabled_with(&["/bin/true"]), &["/bin/echo".to_owned()])
+            authorize_run(&enabled_with(&[ABS_PATH_B]), &[ABS_PATH_A.to_owned()])
                 .unwrap_err()
                 .contains("executable not in allowlist")
         );
