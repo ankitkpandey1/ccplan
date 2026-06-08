@@ -713,13 +713,21 @@ tested agent skill** so agents can install and use `ccplan` — with automated c
 
 | Stage | Title | Done | Tests (passed) | Audit entry | Commit |
 |------:|-------|:----:|:--------------:|:-----------:|--------|
-| 0 | Repo/toolchain/CI bootstrap | [ ] | 2 | | |
-| 1 | Domain model & TOML schema | [ ] | | | |
-| 2 | Time, Clock, lifecycle logic | [ ] | | | |
-| 3 | Storage layer | [ ] | | | |
-| 4 | CLI surface & command logic | [x] | 83 | 2026-06-08 | `feat: full CLI surface, apply reconciler, and fire handler (fake backend)` |
-| 5 | Native backends & doctor | [ ] | | | |
-| 6 | run: automation & security | [ ] | | | |
+| 0 | Repo/toolchain/CI bootstrap | [x] | 2 | 2026-06-08 | `9f99ac3` |
+| 1 | Domain model & TOML schema | [x] | — | 2026-06-08 | `16d55bf` |
+| 2 | Time, Clock, lifecycle logic | [x] | — | 2026-06-08 | `393bacb` |
+| 3 | Storage layer | [x] | — | 2026-06-08 | `50ef2c1` (+`4afacd2`) |
+| 4 | CLI surface & command logic | [x] | 83 | 2026-06-08 | `0d816d3` |
+| 5 | Native backends & doctor | [x] | — | 2026-06-08 | `7410f0d` |
+| 6 | run: automation & security | [x] | 128 | 2026-06-08 | `b3ab747` + correction pass (`1add9be`…`cfe8fb3`) |
 | 7 | Completions & man page | [ ] | | | |
 | 8 | OSS hygiene & release | [ ] | | | |
 | 9 | Production readiness & ship | [ ] | | | |
+
+> **Handoff note (2026-06-08):** Stages 0–6 implemented; full DoD gate green on Linux
+> (128 passed / 0 failed / 0 filtered out, 1 sanctioned ignored test; 100% line+function coverage;
+> clippy/deny/fmt clean; anti-gaming guards #1+#2 pass). All P1 backlog items resolved (B-006/007/008/
+> 011/012/014). **Next: Stage 7 (completions & man page).** Per-stage "Tests (passed)" was not
+> recorded for stages 1/2/3/5 by earlier sessions (`—`); the cumulative total is authoritative and
+> lives in the latest `audit_log.md` entry. `schtasks.rs`/`launchd.rs` are CI-verified only (don't
+> compile on the Linux dev box).
