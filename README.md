@@ -2,7 +2,7 @@
 
 # ccplan
 
-**A plain-text, agent-fillable day planner that actually *does things* — notify, mark done, and run commands at the right time.**
+**A plain-text, agent-fillable day planner that notifies you, tracks block status, and runs commands at the right time.**
 
 [![CI](https://github.com/ankitkpandey1/cc-planner/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ankitkpandey1/cc-planner/actions/workflows/ci.yml)
 [![coverage](https://codecov.io/gh/ankitkpandey1/cc-planner/branch/main/graph/badge.svg)](https://codecov.io/gh/ankitkpandey1/cc-planner)
@@ -11,8 +11,8 @@
 
 </div>
 
-> **Status:** in active development toward `v1.0.0`. The design is locked (see [`DESIGN.md`](DESIGN.md));
-> implementation follows [`development/implementation_checklist.md`](development/implementation_checklist.md).
+> **Status:** pre-release. The `1.0.0` code is complete, but it is not yet tagged or published —
+> install by [building from source](#build-from-source) for now. Design notes live in [`DESIGN.md`](DESIGN.md).
 
 ---
 
@@ -26,8 +26,8 @@ real, native OS-scheduled events that:
 - let you **mark blocks done / skipped**,
 - and optionally **run a command** when a block starts (start a sync, kick off a build, open a doc).
 
-It is built to be driven by an agent: every command is non-interactive, scriptable, and speaks
-JSON. "Plan my day" becomes something an agent can actually do for you, end to end.
+It is built to be driven by an agent: every command is non-interactive, scriptable, and emits
+JSON, so an agent can plan your day end to end.
 
 ### Why not a calendar / to-do app / cron?
 
@@ -46,14 +46,14 @@ runs on Linux/macOS/Windows, and keeps a human-readable plain-text plan as its s
 
 ## Features
 
-- 📝 **Plain-text plan** — one human- and agent-editable [TOML](#the-plan-file) file per day.
-- 🤖 **Agent-first CLI** — non-interactive, stable exit codes, `--json` on every read, whole-day authoring from stdin.
-- 🔔 **Native notifications** — at block start and at optional per-block lead times.
-- ✅ **Status tracking** — `done` / `skipped`, with automatic `missed` / `expired` detection.
-- ⚙️ **Per-block automation** — run an allow-listed command when a block fires (opt-in, policy-gated).
-- 🖥️ **Truly cross-platform** — uses the native scheduler on each OS (systemd / launchd / Task Scheduler). No background daemon.
-- 🔁 **Idempotent & safe** — re-apply converges; atomic writes; at-most-once firing; immutable history.
-- 🌐 **Local & offline** — no account, no network, no telemetry.
+- **Plain-text plan** — one human- and agent-editable [TOML](#the-plan-file) file per day.
+- **Agent-first CLI** — non-interactive, stable exit codes, `--json` on every read, whole-day authoring from stdin.
+- **Native notifications** — at block start and at optional per-block lead times.
+- **Status tracking** — `done` / `skipped`, with automatic `missed` / `expired` detection.
+- **Per-block automation** — run an allow-listed command when a block fires (opt-in, policy-gated).
+- **Truly cross-platform** — uses the native scheduler on each OS (systemd / launchd / Task Scheduler). No background daemon.
+- **Idempotent & safe** — re-apply converges; atomic writes; at-most-once firing; immutable history.
+- **Local & offline** — no account, no network, no telemetry.
 
 ---
 
@@ -95,9 +95,9 @@ ccplan show
 ccplan apply
 
 # 4. As the day goes on
-ccplan now            # what's active right now
-ccplan next           # what's coming up
-ccplan done focus-1   # mark a block complete
+ccplan now              # what's active right now
+ccplan next             # what's coming up
+ccplan done focus-time  # mark a block complete (id is auto-slugged from the title)
 ```
 
 That's it — at 11:00 you get a "Focus time" notification, at 11:30 the sync-up alert fires, and so on.
@@ -229,7 +229,7 @@ status   = "pending"
 | Command | Purpose |
 |---|---|
 | `ccplan apply [--dry-run]` | Reconcile OS triggers to match the plan (idempotent). |
-| `ccplan status` | Scheduler health: live triggers, drift, last fires. |
+| `ccplan status` | Scheduler health: counts of tracked vs. live OS triggers. |
 | `ccplan doctor` | Check the native scheduler + notifier are usable; print fixes. |
 | `ccplan completions <shell>` | Print shell completions. |
 
@@ -252,7 +252,7 @@ allowed_executables = [            # `run:`'s argv[0] must be an absolute path o
 ]
 
 [notify]
-default_lead = "0m"                # default per-block notify lead if unset
+default_lead = "5m"                # notify lead applied to a block that omits its own `notify`
 ```
 
 ---
