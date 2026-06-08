@@ -205,6 +205,32 @@ Tooling (installed in CI, not deps): `cargo-llvm-cov`, `cargo-deny`, `cargo-dist
 > Format: `### YYYY-MM-DD — <stage/topic>` then bullets. Record decisions, surprises, dead-ends,
 > and anything a future session must know. This is the anti-amnesia log.
 
+### 2026-06-08 — Stage 4 CLI surface + fake-backed apply/fire
+- Stage 4 precondition: re-read `notes.md`, `backlog.md`, `implementation_checklist.md`, and DESIGN
+  §6/§7/§8 before coding; re-ran the Stage 3/global gate and confirmed the predecessor was green.
+- The command layer now uses `ContextRefs` internally: `Context<C,S,N>` remains strongly typed for
+  production and fakes, while command dispatch borrows trait objects for `Clock`, `Scheduler`, and
+  `Notifier`. This avoids duplicate generic coverage artifacts and keeps command behavior compiled
+  through one implementation.
+- `run(cli,out)` builds the runtime context from `Store::for_user()` and the unavailable Stage 5
+  scheduler/notifier. Tests call `run_with_context` with `FixedClock`, `RecordingScheduler`, and
+  `RecordingNotifier`. Binary smoke tests use `CCPLAN_ROOT` to keep real process tests isolated.
+- `apply` computes future notify/start/end trigger descriptors from the current plan, diffs them
+  against `triggers.json`, calls the injected scheduler for add/remove unless `--dry-run`, and persists
+  the trigger ledger only after successful fake scheduler convergence. `clear --yes` uses the same
+  reconciler with an empty desired set before archive/purge.
+- `fire` is ledger-first and idempotent: missing plan/block, stale rev, and already-fired events no-op;
+  active decisions notify, activate, miss, or close through the pure lifecycle table. `run:` is
+  deliberately logged as `run-deferred` until Stage 6; no shell execution path exists in Stage 4.
+- `status`, `doctor`, and `completions` are non-interactive Stage 4 stubs. Real backend diagnostics and
+  generated completions/man pages stay in Stages 5 and 7.
+- Coverage gotchas: closure lines inside `ok_or_else` counted as missed until explicit missing-plan and
+  missing-block command tests covered them. The real `SystemClock`, `Store::for_user`, and unavailable
+  scheduler/notifier methods remain `coverage(off)` as runtime/OS boundaries, not business logic.
+- Dependency cleanup: inline `insta` snapshots were replaced with `serde_json::json!` equality checks
+  because `insta` pulled an extra dev-only dependency chain and duplicate `cpufeatures`. After pruning
+  it, `cargo tree --duplicates` is clean again.
+
 ### 2026-06-08 — Stage 3 atomic store + fired ledger + triggers
 - Stage 3 precondition: re-read notes/backlog/checklist plus DESIGN §6.2/§6.3/§6.4 and Inv-7/Inv-9/
   Inv-14; re-ran the Stage 2/global gate before implementation.

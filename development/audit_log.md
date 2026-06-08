@@ -616,3 +616,177 @@ Codecov action`; `30f9a70` `ci: keep coverage gate independent of codecov`   · 
 
 ### G. Acceptance-gate confirmation
 - [x] DoD green; `store` at 100%. Audit + notes updated.
+
+## Stage 4 — CLI surface & command logic (wired with fakes) — 2026-06-08
+
+**Commit(s):** `0d816d3` `feat: full CLI surface, apply reconciler, and fire handler`   ·   **Branch:** `dev`
+
+### A. Recon summary
+- Re-read `development/notes.md`, `development/backlog.md`, `development/implementation_checklist.md`,
+  DESIGN §6/§7/§8, and the existing Stage 3 store/lifecycle/time code before implementing Stage 4.
+- Re-ran the Stage 3/global gate before coding; fmt, clippy, full tests, coverage, `cargo-deny`,
+  release build, MSRV check, and duplicate scan were green at the Stage 3 tip.
+- Confirmed the command design needed a fake-backed seam (`run_with_context`) for scheduler/notifier
+  assertions and real binary smoke tests only for parse/version/temp-store behavior.
+
+### B. What was built
+- Added `src/context.rs` with `Context`, `ContextRefs`, `Scheduler`, `Notifier`, unavailable Stage 5
+  runtime backends, and recording fakes for tests.
+- Added `src/error.rs` with the crate `Error` enum and documented exit-code mapping.
+- Expanded `src/cli.rs` to the full Stage 4 `clap` tree:
+  `set/add/edit/rm/done/skip/clear/show/now/next/agenda/apply/fire/status/doctor/completions`.
+- Added `src/commands.rs` with command dispatch and platform-agnostic behavior over the store,
+  lifecycle, trigger ledger, fired ledger, injected clock, fake scheduler, and fake notifier.
+- Implemented `apply` as the idempotent trigger reconciler and made `clear --yes` use the same
+  reconciler path with an empty desired set.
+- Implemented `fire` as ledger-first and idempotent: missing/stale/already-fired no-op; notify,
+  activate, missed, and close decisions persist through the store and append `fire.log`.
+- Added `ScheduleRev` parsing, `Event` parsing/display, and binary/test runtime store plumbing via
+  `CCPLAN_ROOT`.
+- Added fake-backed command integration tests, real binary smoke tests, and an `apply` idempotence
+  property test. JSON checks use plain `serde_json::json!` equality to keep the dependency graph clean.
+
+### C. Self-review findings & fixes
+- Initial command implementation was generic over context/output types, which produced duplicate
+  llvm-cov function records. Refactored commands to use `ContextRefs` plus `&mut dyn Write` internally
+  while keeping `Context<C,S,N>` generic at the API boundary.
+- Coverage exposed untested `ok_or_else` closure lines for missing plan/block paths. Added explicit
+  missing-plan, missing-edit-target, and missing-remove-target assertions.
+- `insta` was useful for early JSON snapshots but pulled a dev-only transitive chain and duplicate
+  `cpufeatures`. Replaced those snapshots with `serde_json::json!` equality checks and pruned the
+  lockfile; `cargo tree --duplicates` is clean again.
+- Release build surfaced non-test unused imports for test fakes. Gated `RefCell`/`BTreeMap` imports
+  behind `#[cfg(any(test, feature = "test-fakes"))]`.
+
+### D. Evidence
+- `cargo fmt --all -- --check`:
+
+  ```text
+  <no output; exit 0>
+  ```
+
+- `cargo clippy --all-targets --all-features -- -D warnings`:
+
+  ```text
+  Checking ccplan v1.0.0 (/home/euler/test/cc-planner)
+  Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.31s
+  ```
+
+- `cargo test --all-features --workspace`:
+
+  ```text
+  running 3 tests
+  test result: ok. 3 passed; 0 failed; 0 filtered out
+
+  running 0 tests
+  test result: ok. 0 passed; 0 failed; 0 filtered out
+
+  running 1 test
+  test result: ok. 1 passed; 0 failed; 0 filtered out
+
+  running 4 tests
+  test result: ok. 4 passed; 0 failed; 0 filtered out
+
+  running 15 tests
+  test result: ok. 15 passed; 0 failed; 0 filtered out
+
+  running 13 tests
+  test result: ok. 13 passed; 0 failed; 0 filtered out
+
+  running 2 tests
+  test result: ok. 2 passed; 0 failed; 0 filtered out
+
+  running 13 tests
+  test result: ok. 13 passed; 0 failed; 0 filtered out
+
+  running 3 tests
+  test result: ok. 3 passed; 0 failed; 0 filtered out
+
+  running 24 tests
+  test result: ok. 24 passed; 0 failed; 0 filtered out
+
+  running 1 test
+  test result: ok. 1 passed; 0 failed; 0 filtered out
+
+  running 4 tests
+  test result: ok. 4 passed; 0 failed; 0 filtered out
+
+  Doc-tests ccplan
+  test result: ok. 0 passed; 0 failed; 0 filtered out
+  ```
+
+- `RUSTFLAGS="--cfg coverage_nightly" cargo +nightly llvm-cov --all-features --workspace
+  --fail-under-lines 100`:
+
+  ```text
+  commands.rs  581 lines, 0 missed lines, 100.00% line cover
+  context.rs    50 lines, 0 missed lines, 100.00% line cover
+  error.rs      24 lines, 0 missed lines, 100.00% line cover
+  lifecycle.rs 102 lines, 0 missed lines, 100.00% line cover
+  model.rs     459 lines, 0 missed lines, 100.00% line cover
+  store.rs     244 lines, 0 missed lines, 100.00% line cover
+  time.rs       27 lines, 0 missed lines, 100.00% line cover
+  TOTAL       1519 lines, 0 missed lines, 100.00% line cover
+  ```
+
+- `cargo deny check`:
+
+  ```text
+  advisories ok, bans ok, licenses ok, sources ok
+  ```
+
+- `cargo build --release`:
+
+  ```text
+  Finished `release` profile [optimized] target(s) in 4.00s
+  ```
+
+- `cargo +1.85.0 check --all-features --workspace`:
+
+  ```text
+  Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.40s
+  ```
+
+- `cargo tree --duplicates`:
+
+  ```text
+  warning: nothing to print.
+  ```
+
+- CI: https://github.com/ankitkpandey1/cc-planner/actions/runs/27135144268 passed.
+
+  ```text
+  ✓ MSRV in 32s
+  ✓ cargo-deny in 45s
+  ✓ test (ubuntu-latest) in 39s
+  ✓ test (macos-latest) in 34s
+  ✓ test (windows-latest) in 1m53s
+  ✓ coverage in 56s
+  ```
+
+- Coverage exclusions added this stage:
+  - `runtime_store` is marked `coverage(off)` because it is the real platform-directory/env boundary.
+  - `UnavailableScheduler::{add,remove}` and `UnavailableNotifier::notify` are marked `coverage(off)`
+    because Stage 4 deliberately has no real OS backend; fake-backed business behavior is covered.
+
+### E. Reflection & learnings
+- The borrowed `ContextRefs` command layer is simpler for coverage and still preserves strongly typed
+  production/fake contexts at the public seam.
+- For JSON CLI tests, explicit `serde_json::json!` equality is enough and avoids a heavier snapshot
+  dependency until the project truly needs snapshot files.
+- The `fire` path stayed intentionally conservative: at-most-once ledger and lifecycle decisions are
+  in place, but `run:` execution remains deferred to Stage 6 so Stage 4 cannot accidentally grow a
+  shell-execution path.
+
+### F. Backlog items raised/closed
+- Raised: none.
+- Closed: none.
+
+### G. Acceptance-gate confirmation
+- [x] Context, scheduler/notifier traits, and recording fakes implemented.
+- [x] `run` / `run_with_context` test seam implemented.
+- [x] Full CLI tree implemented.
+- [x] Command dispatch, exit-code mapping, JSON array contracts, and non-terminal mutation semantics implemented.
+- [x] `apply`, `clear`, and `fire` implemented over fake backends and durable ledgers.
+- [x] Fake-backed integration tests, binary smoke tests, and `apply` property test added.
+- [x] DoD green; command logic, reconciler, and fire integration at 100% line coverage.
