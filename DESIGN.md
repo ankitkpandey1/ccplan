@@ -294,6 +294,7 @@ Authoring / mutation:
 |---|---|
 | `ccplan set --from <file\|-> [--date D] [--override-history]` | Replace the day's plan from TOML/JSON. **Terminal blocks (done/skipped/missed/expired) are always retained**, carried forward by `id` *even if the incoming plan omits them*; only pending/active blocks are replaced. Modifying or dropping a terminal block, or reusing a terminal `id`, requires `--override-history` (else exit `6`). Validates, writes atomically. |
 | `ccplan add --title T --start 11:00 [--end\|--duration] [--notify] [--run …] [--id]` | Upsert one block (same `id` ⇒ update a non-terminal block). |
+| `ccplan remind "T" --in 30m [--id]` | Sugar over add+apply: resolve `now + duration` (clock TZ, minute granularity) into a zero-lead block — so only the `start` event notifies, exactly at the target (Inv-16) — then auto-apply. `--in` reuses `DurationSpec` (max 24h, capping rollover to tomorrow). Same upsert/terminal-history rules as `add`. |
 | `ccplan edit <id> --start … --title …` | Patch a non-terminal block. |
 | `ccplan rm <id>` | Remove a pending block. |
 | `ccplan done <id>` / `ccplan skip <id>` | Status transition. |

@@ -337,6 +337,73 @@ fn add_edit_and_status_errors_cover_conflict_paths() {
 }
 
 #[test]
+fn remind_schedules_zero_lead_block_and_auto_applies() {
+    let (_temp, context) = test_context_at("2026-06-08T10:00:00+05:30[Asia/Kolkata]");
+
+    let output = String::from_utf8(run_ok(
+        &context,
+        ["ccplan", "remind", "Stretch break", "--in", "1h30m"],
+    ))
+    .unwrap();
+
+    // Human confirmation reports the resolved target (10:00 + 1h30m = 11:30, today).
+    assert!(output.contains("reminder \"Stretch break\" set for 11:30 on 2026-06-08"));
+
+    let stored = context.store.load_plan(&date()).unwrap().unwrap();
+    assert_eq!(stored.blocks.len(), 1);
+    let block = &stored.blocks[0];
+    assert_eq!(block.id.as_str(), "stretch-break"); // auto-slugged from the text
+    assert_eq!(block.title, "Stretch break");
+    assert_eq!(block.start.to_string(), "11:30");
+    assert_eq!(block.span, Span::Duration("1m".parse().unwrap()));
+    assert_eq!(block.notify.as_seconds(), 0); // zero lead
+
+    // Auto-applied: the OS triggers are live without a second `apply`. A zero-lead block fires only
+    // its `start` (which itself notifies) and `end` — the heads-up `notify` trigger is omitted.
+    let triggers = context.store.list_triggers().unwrap();
+    assert_eq!(triggers.len(), 2);
+    assert!(triggers.iter().any(|t| t.backend_id.ends_with("-start")));
+    assert!(triggers.iter().any(|t| t.backend_id.ends_with("-end")));
+    assert!(!triggers.iter().any(|t| t.backend_id.ends_with("-notify")));
+    assert_eq!(context.scheduler.triggers().len(), 2);
+
+    // Re-using the slugged id while the block is still pending replaces it (no error).
+    run_ok(
+        &context,
+        ["ccplan", "remind", "Stretch break", "--in", "2h"],
+    );
+    let stored = context.store.load_plan(&date()).unwrap().unwrap();
+    assert_eq!(stored.blocks.len(), 1);
+    assert_eq!(stored.blocks[0].start.to_string(), "12:00");
+
+    // Once the block is terminal, re-using its id is a history conflict (exit 6).
+    run_ok(&context, ["ccplan", "done", "stretch-break"]);
+    let err = run_err(
+        &context,
+        ["ccplan", "remind", "Stretch break", "--in", "3h"],
+    );
+    assert_eq!(err.exit_code(), 6);
+}
+
+#[test]
+fn remind_rolls_over_to_next_day_and_honors_explicit_id() {
+    // 23:00 + 2h crosses midnight: the reminder must land in tomorrow's plan, not today's.
+    let (_temp, context) = test_context_at("2026-06-08T23:00:00+05:30[Asia/Kolkata]");
+
+    run_ok(
+        &context,
+        ["ccplan", "remind", "Call mom", "--in", "2h", "--id", "ring"],
+    );
+
+    let tomorrow: PlanDate = "2026-06-09".parse().unwrap();
+    assert!(context.store.load_plan(&date()).unwrap().is_none());
+    let stored = context.store.load_plan(&tomorrow).unwrap().unwrap();
+    assert_eq!(stored.blocks.len(), 1);
+    assert_eq!(stored.blocks[0].id.as_str(), "ring"); // explicit --id wins over the slug
+    assert_eq!(stored.blocks[0].start.to_string(), "01:00");
+}
+
+#[test]
 fn read_queries_reconcile_in_memory_without_persisting_and_apply_persists() {
     let (_temp, context) = test_context_at("2026-06-08T11:10:00+05:30[Asia/Kolkata]");
     let mut plan = plan();

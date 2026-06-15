@@ -91,6 +91,8 @@ ccplan apply             # hand the schedule to the OS — alerts now fire on th
 ccplan now               # what's active right now
 ccplan next              # what's coming up
 ccplan done focus-time   # mark a block complete (id is auto-slugged from the title)
+
+ccplan remind "Stretch" --in 25m   # one-shot: alert 25 minutes from now, applied immediately
 ```
 
 At 11:00 you get a "Focus time" notification, at 11:30 the sync-up alert fires, and so on — even if
@@ -145,6 +147,7 @@ An agent authors the whole day in one shot by piping TOML into `ccplan set --fro
 |---|---|
 | `ccplan set --from <file\|-> [--override-history]` | Replace the whole day. Terminal blocks (done/skipped/missed/expired) are always kept; changing them needs `--override-history`. |
 | `ccplan add --title T --start 11:00 [--end\|--duration] [--notify] [--run …] [--id]` | Add or update one block. |
+| `ccplan remind "T" --in 30m [--id]` | One-shot reminder: add a zero-lead block at now+duration and apply it in one step. |
 | `ccplan edit <id> [--start …] [--title …] …` | Patch a non-terminal block. |
 | `ccplan rm <id>` | Remove a pending block. |
 | `ccplan done <id>` / `ccplan skip <id>` | Mark a block complete / skipped. |

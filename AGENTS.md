@@ -41,6 +41,8 @@ ccplan show --json
 ccplan agenda --json
 ```
 
+For a single one-shot reminder, skip the TOML — `ccplan remind "Stretch" --in 30m` adds a zero-lead block at now+duration and applies it in one step.
+
 Exit codes:
 
 - `0`: success.
