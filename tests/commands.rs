@@ -1298,11 +1298,21 @@ fn test_automation_refused_when_not_absolute() {
 #[test]
 fn test_automation_refused_when_not_allowlisted() {
     let (_temp, mut context) = test_context_at("2026-06-08T11:00:00+05:30[Asia/Kolkata]");
+    // Both paths must be absolute on the host so the allowlist check (not the
+    // absolute-path check) is the one that rejects: the run executable is absolute
+    // but is not the (different, absolute) allowlisted one.
+    let (run_exe, allowed_exe) = if cfg!(windows) {
+        (
+            "C:\\Windows\\System32\\cmd.exe",
+            "C:\\Windows\\System32\\different.exe",
+        )
+    } else {
+        ("/bin/echo", "/bin/different")
+    };
     context.config.automation.enabled = true;
-    context.config.automation.allowed_executables =
-        vec![std::path::PathBuf::from("/bin/different")];
+    context.config.automation.allowed_executables = vec![std::path::PathBuf::from(allowed_exe)];
     let mut run_plan = plan();
-    run_plan.blocks[0].run = Some(Run::new(vec!["/bin/echo".to_owned()]).unwrap());
+    run_plan.blocks[0].run = Some(Run::new(vec![run_exe.to_owned()]).unwrap());
     context
         .store
         .set_plan(&run_plan, HistoryPolicy::Preserve)
