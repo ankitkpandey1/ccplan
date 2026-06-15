@@ -105,8 +105,8 @@ fn cargo_manifest_declares_release_metadata() {
     let dist = &manifest["workspace"]["metadata"]["dist"];
     assert_eq!(dist["cargo-dist-version"].as_str(), Some("0.32.0"));
     assert_eq!(dist["ci"].as_array().unwrap()[0].as_str(), Some("github"));
-    assert_eq!(dist["installers"].as_array().unwrap().len(), 4);
-    for installer in ["shell", "powershell", "homebrew", "msi"] {
+    assert_eq!(dist["installers"].as_array().unwrap().len(), 3);
+    for installer in ["shell", "powershell", "msi"] {
         assert!(
             dist["installers"]
                 .as_array()
@@ -133,7 +133,10 @@ fn cargo_manifest_declares_release_metadata() {
             "missing target {target}",
         );
     }
-    assert_eq!(dist["tap"].as_str(), Some("ankitkpandey1/homebrew-tap"));
+    // No Homebrew tap: the formula publish job was dropped (unconfigured tap + token); shell,
+    // PowerShell, and MSI installers are the supported paths.
+    assert!(dist.get("tap").is_none());
+    assert!(dist.get("publish-jobs").is_none());
     let binaries = manifest["bin"].as_array().unwrap();
     for binary in ["ccplan", "ccplan-fire"] {
         assert!(
