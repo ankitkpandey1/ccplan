@@ -39,6 +39,7 @@ pub enum Commands {
     Status,
     Doctor,
     Completions(CompletionsArgs),
+    Mcp(McpArgs),
 }
 
 #[derive(Debug, Args)]
@@ -174,6 +175,9 @@ pub enum Shell {
     #[value(name = "powershell")]
     Powershell,
 }
+
+#[derive(Debug, Args)]
+pub struct McpArgs {}
 
 impl std::fmt::Display for Shell {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

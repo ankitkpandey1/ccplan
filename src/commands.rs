@@ -57,6 +57,7 @@ pub fn dispatch(
             completions(args.shell, out);
             Ok(())
         }
+        Some(Commands::Mcp(_args)) => crate::mcp::run_mcp_server(context),
     }
 }
 
@@ -1186,7 +1187,7 @@ fn ensure_non_terminal(block: &Block) -> Result<()> {
     }
 }
 
-fn slug_block_id(title: &str) -> Result<BlockId> {
+pub(crate) fn slug_block_id(title: &str) -> Result<BlockId> {
     let mut slug = String::new();
     let mut last_dash = false;
     for ch in title.chars().flat_map(char::to_lowercase) {

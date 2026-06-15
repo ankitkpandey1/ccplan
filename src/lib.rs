@@ -15,6 +15,7 @@ pub mod config;
 pub mod context;
 pub mod error;
 pub mod lifecycle;
+pub mod mcp;
 pub mod model;
 mod platform;
 pub mod store;

@@ -29,6 +29,15 @@ fn no_command_is_a_successful_noop() {
 }
 
 #[test]
+fn mcp_subcommand_exits_cleanly_on_eof() {
+    // In test builds run_mcp_server uses an empty Cursor instead of real stdin,
+    // so this exits immediately and produces no output.
+    let (_temp, context) = test_context_at("2026-06-08T10:00:00+05:30[Asia/Kolkata]");
+    let output = run_ok(&context, ["ccplan", "mcp"]);
+    assert!(output.is_empty());
+}
+
+#[test]
 fn set_and_show_json_round_trip_with_fake_context() {
     let (_temp, context) = test_context_at("2026-06-08T10:00:00+05:30[Asia/Kolkata]");
     let input = context

@@ -27,6 +27,7 @@ pub(crate) fn command() -> Command {
         .subcommand(Command::new("status"))
         .subcommand(Command::new("doctor"))
         .subcommand(completions_command())
+        .subcommand(Command::new("mcp"))
 }
 
 fn set_command() -> Command {
