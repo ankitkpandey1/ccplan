@@ -24,6 +24,7 @@ pub struct Cli {
 pub enum Commands {
     Set(SetArgs),
     Add(AddArgs),
+    Remind(RemindArgs),
     Edit(EditArgs),
     Rm(BlockTarget),
     Done(BlockTarget),
@@ -70,6 +71,18 @@ pub struct AddArgs {
     pub tags: Vec<String>,
     #[arg(long, num_args = 1.., value_name = "ARGV")]
     pub run: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct RemindArgs {
+    /// Reminder text, shown in the notification.
+    pub text: String,
+    /// Fire this long from now, e.g. `1h`, `30m`, `1h30m` (max 24h).
+    #[arg(long = "in")]
+    pub fire_in: DurationSpec,
+    /// Override the auto-slugged block id.
+    #[arg(long)]
+    pub id: Option<BlockId>,
 }
 
 #[derive(Debug, Args)]

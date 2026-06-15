@@ -12,6 +12,7 @@ pub(crate) fn command() -> Command {
         .about("Agent-authorable cross-platform CLI day planner")
         .subcommand(set_command())
         .subcommand(add_command())
+        .subcommand(remind_command())
         .subcommand(edit_command())
         .subcommand(block_target_command("rm"))
         .subcommand(block_target_command("done"))
@@ -51,6 +52,13 @@ fn add_command() -> Command {
         .arg(Arg::new("notify").long("notify"))
         .arg(Arg::new("tags").long("tags").value_delimiter(','))
         .arg(Arg::new("run").long("run").value_name("ARGV").num_args(1..))
+}
+
+fn remind_command() -> Command {
+    Command::new("remind")
+        .arg(Arg::new("text").required(true))
+        .arg(Arg::new("fire_in").long("in").required(true))
+        .arg(Arg::new("id").long("id").value_name(ID))
 }
 
 fn edit_command() -> Command {

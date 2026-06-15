@@ -16,7 +16,7 @@ use serde::Serialize;
 use crate::{
     cli::{
         AddArgs, AgendaArgs, ApplyArgs, ClearArgs, Cli, Commands, EditArgs, FireArgs, ReadArgs,
-        SetArgs, Shell,
+        RemindArgs, SetArgs, Shell,
     },
     config::AutomationConfig,
     context::{ContextRefs, Notification, Scheduler},
@@ -39,6 +39,7 @@ pub fn dispatch(
         None => Ok(()),
         Some(Commands::Set(args)) => set(args, out, context),
         Some(Commands::Add(args)) => add(args, context),
+        Some(Commands::Remind(args)) => remind(args, out, context),
         Some(Commands::Edit(args)) => edit(args, context),
         Some(Commands::Rm(args)) => remove(&args.id, context),
         Some(Commands::Done(args)) => set_status(args.id, Status::Done, context),
@@ -111,6 +112,85 @@ fn add(args: AddArgs, context: &ContextRefs<'_>) -> Result<()> {
         }
         Ok(plan)
     })
+}
+
+/// Minute-granular window for a one-shot reminder block.
+///
+/// A reminder is a point in time, but a block needs a span; one minute is long enough to give the
+/// block a well-formed `end` event and short enough that it leaves the agenda promptly after firing.
+/// `from_seconds_const(60)` is always `Some` (60 is within a single day); the `match` is the
+/// const-context idiom (mirrors `config::DEFAULT_GRACE`).
+const REMINDER_WINDOW: DurationSpec = match DurationSpec::from_seconds_const(60) {
+    Some(window) => window,
+    None => unreachable!(),
+};
+
+/// Sets a one-shot reminder `--in <duration>` from now, then applies it immediately.
+///
+/// Sugar over `add` + `apply`: it resolves the absolute wall-clock target in the clock's time zone
+/// (minute granularity, like the rest of the system), creates a zero-lead block so the only alert is
+/// the `start` event firing exactly at the target (the heads-up `notify` trigger is omitted when the
+/// lead is zero, Inv-16; the `start` event always notifies, DESIGN §6.3), and auto-applies so the OS
+/// trigger goes live without a second command.
+fn remind(args: RemindArgs, out: &mut dyn Write, context: &ContextRefs<'_>) -> Result<()> {
+    let RemindArgs { text, fire_in, id } = args;
+    let lead = SignedDuration::from_secs(i64::from(fire_in.as_seconds()));
+    let target = context
+        .clock
+        .now()
+        .checked_add(lead)
+        .map_err(crate::time::TimeError::from)?;
+    let date = PlanDate::from_jiff_date(target.date());
+    let minutes =
+        u16::from(target.hour().unsigned_abs()) * 60 + u16::from(target.minute().unsigned_abs());
+    let start = ClockTime::from_minutes_since_midnight(minutes).map_err(Error::from)?;
+
+    let id = match id {
+        Some(id) => id,
+        None => slug_block_id(&text)?,
+    };
+    let block = Block {
+        id: id.clone(),
+        title: text.clone(),
+        start,
+        span: Span::Duration(REMINDER_WINDOW),
+        notify: Lead::from_seconds_const(0),
+        tags: Vec::new(),
+        status: Status::Pending,
+        run: None,
+    };
+
+    // Same transactional load→mutate→write as `add` (Inv-17): a concurrent writer on the same day
+    // can't be lost, and a colliding terminal block is refused rather than overwritten.
+    update_plan(context, &date, |existing| {
+        let mut plan = match existing {
+            Some(plan) => plan,
+            None => empty_plan(date.clone(), timezone_from_clock(context)?),
+        };
+        match plan.blocks.iter().position(|existing| existing.id == id) {
+            Some(index) if plan.blocks[index].status.is_terminal() => {
+                Err(Error::HistoryConflict { id })
+            }
+            Some(index) => {
+                plan.blocks[index] = block;
+                Ok(plan)
+            }
+            None => {
+                plan.blocks.push(block);
+                Ok(plan)
+            }
+        }
+    })?;
+
+    writeln!(out, "reminder \"{text}\" set for {start} on {date}")?;
+    apply(
+        ApplyArgs {
+            date: Some(date),
+            dry_run: false,
+        },
+        out,
+        context,
+    )
 }
 
 fn edit(args: EditArgs, context: &ContextRefs<'_>) -> Result<()> {
