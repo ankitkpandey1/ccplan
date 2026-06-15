@@ -2,7 +2,9 @@
 
 # ccplan
 
-**A plain-text, agent-fillable day planner that notifies you, tracks block status, and runs commands at the right time.**
+**The day planner your AI agent can run.**
+Write a plain-text plan — or have an agent write it — and ccplan turns it into native OS
+notifications, status tracking, and time-triggered commands. No daemon, no account, no cloud.
 
 [![CI](https://github.com/ankitkpandey1/ccplan/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ankitkpandey1/ccplan/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/ankitkpandey1/ccplan?sort=semver)](https://github.com/ankitkpandey1/ccplan/releases/latest)
@@ -10,158 +12,97 @@
 
 </div>
 
-> **`v1.0.0` is released** — grab a [prebuilt binary or installer](#install) for Linux, macOS, or
-> Windows. Design notes live in [`DESIGN.md`](DESIGN.md).
+---
+
+## Set up with your AI agent
+
+ccplan is built to be driven by an agent. **Copy the block below and paste it to Claude Code (or any
+coding agent).** It installs ccplan, loads the skill, and starts planning your day — you run nothing
+yourself.
+
+```text
+Install and use ccplan (an agent-driven CLI day planner) for me, then plan my day.
+
+1. Install the binary.
+   macOS/Linux:  curl --proto '=https' --tlsv1.2 -LsSf https://github.com/ankitkpandey1/ccplan/releases/latest/download/ccplan-installer.sh | sh
+   Windows:      powershell -c "irm https://github.com/ankitkpandey1/ccplan/releases/latest/download/ccplan-installer.ps1 | iex"
+
+2. Install the ccplan agent skill so you know exactly how to use it.
+   mkdir -p ~/.claude/skills/ccplan
+   curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/ankitkpandey1/ccplan/main/skills/ccplan/SKILL.md -o ~/.claude/skills/ccplan/SKILL.md
+
+3. Confirm it works: run `ccplan --version` and `ccplan doctor`.
+
+4. Read ~/.claude/skills/ccplan/SKILL.md, then ask me about my day and author it with ccplan.
+```
+
+That's it — the agent installs the binary, drops the [skill](skills/ccplan/SKILL.md) into place, and
+follows its recipe (authoring, exit codes, JSON contract). Prefer to drive it yourself? Read on.
 
 ---
 
-## What is ccplan?
+## What it is
 
-`ccplan` is a cross-platform command-line tool for planning your day as a set of **time blocks**.
-You — or a coding agent like Claude Code — write a plain-text plan, and `ccplan` turns it into
-real, native OS-scheduled events that:
+ccplan plans your day as a list of **time blocks**. Each block can **alert you** with a desktop
+notification, be **marked done or skipped**, and optionally **run a command** when it starts — kick
+off a sync, open a doc, start a build. The plan is one plain-text [TOML](#the-plan-file) file you can
+hand-edit or let an agent author end to end.
 
-- **Alert you** with a desktop notification at each block (and an optional lead time),
-- let you **mark blocks done / skipped**,
-- and optionally **run a command** when a block starts (start a sync, kick off a build, open a doc).
-
-It is built to be driven by an agent: every command is non-interactive, scriptable, and emits
-JSON, so an agent can plan your day end to end.
-
-### Why not a calendar / to-do app / cron?
-
-| | Agent can fill it | Desktop alerts | Mark done | Run a command at a time | Cross-platform |
-|------|:---:|:---:|:---:|:---:|:---:|
-| Google Tasks | ✗ (no real CLI) | partial | ✓ | ✗ | ✓ |
+|  | Agent can fill it | Desktop alerts | Mark done | Run a command at a time | Cross-platform |
+|---|:---:|:---:|:---:|:---:|:---:|
+| Google Tasks | ✗ | partial | ✓ | ✗ | ✓ |
 | Calendar / CalDAV | ~ | ✓ | ~ | ✗ | ~ |
-| Taskwarrior | ✓ | via glue | ✓ | ✗ (hooks fire on *edit*, not at a *time*) | ✓ |
+| Taskwarrior | ✓ | via glue | ✓ | ✗ (fires on *edit*, not at a *time*) | ✓ |
 | cron / systemd / launchd | ✓ | — | — | ✓ | per-OS |
-| **ccplan** | ✓ | ✓ | ✓ | ✓ | ✓ |
+| **ccplan** | **✓** | **✓** | **✓** | **✓** | **✓** |
 
-`ccplan` is the one tool that is agent-authorable, time-triggered, can both notify **and** execute,
+ccplan is the one tool that is agent-authorable, time-triggered, can both **notify and execute**,
 runs on Linux/macOS/Windows, and keeps a human-readable plain-text plan as its source of truth.
-
----
-
-## Features
-
-- **Plain-text plan** — one human- and agent-editable [TOML](#the-plan-file) file per day.
-- **Agent-first CLI** — non-interactive, stable exit codes, `--json` on every read, whole-day authoring from stdin.
-- **Native notifications** — at block start and at optional per-block lead times.
-- **Status tracking** — `done` / `skipped`, with automatic `missed` / `expired` detection.
-- **Per-block automation** — run an allow-listed command when a block fires (opt-in, policy-gated).
-- **Truly cross-platform** — uses the native scheduler on each OS (systemd / launchd / Task Scheduler). No background daemon.
-- **Idempotent & safe** — re-apply converges; atomic writes; at-most-once firing; immutable history.
-- **Local & offline** — no account, no network, no telemetry.
 
 ---
 
 ## Install
 
 ```sh
-# Linux / macOS (shell installer)
+# macOS / Linux
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/ankitkpandey1/ccplan/releases/latest/download/ccplan-installer.sh | sh
 
-# Windows (PowerShell installer)
+# Windows (PowerShell)
 powershell -c "irm https://github.com/ankitkpandey1/ccplan/releases/latest/download/ccplan-installer.ps1 | iex"
 ```
 
-Each release ships signed-checksum archives for Linux (x64/ARM64), macOS (Intel/Apple Silicon), and
-Windows, plus a Windows `.msi` — download any of them directly from the
-[latest release](https://github.com/ankitkpandey1/ccplan/releases/latest).
+Every release ships signed-checksum archives for Linux (x64/ARM64) and macOS (Intel/Apple Silicon),
+plus a Windows `.zip` and `.msi` — download any directly from the
+[latest release](https://github.com/ankitkpandey1/ccplan/releases/latest), or
+[build from source](#build-from-source).
 
 ---
 
 ## Quickstart
 
 ```sh
-# 1. Add a few blocks to today's plan
 ccplan add --title "Focus time"      --start 11:00 --end 11:30
 ccplan add --title "Agentic sync-up" --start 11:30 --duration 30m --notify 2m
 ccplan add --title "Standup"         --start 16:25 --duration 5m
 
-# 2. See your day
-ccplan show
+ccplan show              # the day so far
+ccplan apply             # hand the schedule to the OS — alerts now fire on their own
 
-# 3. Schedule the alerts with the OS
-ccplan apply
-
-# 4. As the day goes on
-ccplan now              # what's active right now
-ccplan next             # what's coming up
-ccplan done focus-time  # mark a block complete (id is auto-slugged from the title)
+ccplan now               # what's active right now
+ccplan next              # what's coming up
+ccplan done focus-time   # mark a block complete (id is auto-slugged from the title)
 ```
 
-That's it — at 11:00 you get a "Focus time" notification, at 11:30 the sync-up alert fires, and so on.
-
----
-
-## For agents
-
-`ccplan` is designed to be filled in by an AI agent.
-
-**Install (agent-driven).** An agent can install `ccplan` non-interactively and confirm it works:
-
-```sh
-# Install the prebuilt binary (Linux/macOS; on Windows run the PowerShell line from Install above)
-curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/ankitkpandey1/ccplan/releases/latest/download/ccplan-installer.sh | sh
-
-ccplan --version          # confirm install
-ccplan doctor             # confirm the OS scheduler + notifier are usable, with fixes if not
-```
-
-**Load the skill.** The repo ships a ready-to-use agent skill at
-[`skills/ccplan/SKILL.md`](skills/ccplan/SKILL.md). Drop it into your agent's skills directory
-(for Claude Code: `cp -r skills/ccplan ~/.claude/skills/`) so the agent knows when and how to use
-`ccplan` — installation check, the authoring recipe, exit codes, and the JSON contract. A short
-[`AGENTS.md`](AGENTS.md) at the repo root carries the same canonical recipe inline.
-
-**Canonical recipe** — **author the whole day, then apply**:
-
-```sh
-# An agent composes the full day as TOML and pipes it in, then schedules it.
-ccplan set --from - <<'TOML'
-date     = "2026-06-08"
-timezone = "Asia/Kolkata"
-
-[[block]]
-id = "focus-1"
-title = "Focus time"
-start = "11:00"
-end   = "11:30"
-
-[[block]]
-id = "sync-1"
-title = "Agentic sync-up"
-start = "11:30"
-duration = "30m"
-notify = "2m"
-run = ["/home/me/bin/sync.sh", "--fast"]
-TOML
-
-ccplan apply
-```
-
-Agent-friendly guarantees:
-
-- **Never interactive** — no prompts; destructive operations require an explicit flag (`--yes`, `--override-history`).
-- **`--json` on every read** — `show`, `now`, `next`, `agenda` emit stable JSON; queries that can match
-  multiple blocks always return a JSON **array** (empty is `[]`, never an error).
-- **Deterministic exit codes** — `0` ok · `2` usage/validation · `3` not found · `4` scheduler failure ·
-  `5` automation refused (policy/allowlist) · `6` history conflict (needs `--override-history`).
-- **Whole-plan I/O** — `ccplan set --from -` reads a full day from stdin; `ccplan show --json` round-trips it.
-
-Both [`AGENTS.md`](AGENTS.md) and the [`skills/ccplan/SKILL.md`](skills/ccplan/SKILL.md) skill ship
-with the project and document this recipe for any agent.
+At 11:00 you get a "Focus time" notification, at 11:30 the sync-up alert fires, and so on — even if
+`ccplan` itself isn't running.
 
 ---
 
 ## The plan file
 
-One [TOML](https://toml.io) file per day, stored under your OS data dir
-(`~/.local/share/ccplan/plans/YYYY-MM-DD.toml` on Linux). You can edit it by hand or let an agent
-write it; either way `ccplan apply` re-validates it before scheduling.
+One [TOML](https://toml.io) file per day under your OS data dir
+(`~/.local/share/ccplan/plans/YYYY-MM-DD.toml` on Linux). Edit it by hand or let an agent write it;
+`ccplan apply` re-validates it before scheduling.
 
 ```toml
 date     = "2026-06-08"
@@ -186,10 +127,13 @@ run      = ["/home/me/bin/sync.sh", "--fast"]   # argv vector (no shell) — mus
 status   = "pending"
 ```
 
+An agent authors the whole day in one shot by piping TOML into `ccplan set --from -`, then runs
+`ccplan apply`. Reads round-trip as JSON (`ccplan show --json`).
+
 > **Why TOML, not YAML?** TOML is unambiguous to hand-edit (no significant whitespace, no
-> "`no` → false" surprises), maps cleanly to a list of blocks, and — unlike the YAML serde crates,
-> which are archived/unmaintained or carry a security advisory — it has a maintained, audited Rust
-> implementation. Better for agents, better for supply-chain hygiene.
+> "`no` → false" surprises) and maps cleanly to a list of blocks. Its Rust implementation is
+> maintained and audited, unlike the archived/advisory-carrying YAML crates — better for agents and
+> for supply-chain hygiene.
 
 ---
 
@@ -199,14 +143,14 @@ status   = "pending"
 
 | Command | Purpose |
 |---|---|
-| `ccplan set --from <file\|-> [--override-history]` | Replace the whole day's plan. Terminal blocks (done/skipped/missed/expired) are always retained, even if omitted — changing them needs `--override-history`. |
+| `ccplan set --from <file\|-> [--override-history]` | Replace the whole day. Terminal blocks (done/skipped/missed/expired) are always kept; changing them needs `--override-history`. |
 | `ccplan add --title T --start 11:00 [--end\|--duration] [--notify] [--run …] [--id]` | Add or update one block. |
 | `ccplan edit <id> [--start …] [--title …] …` | Patch a non-terminal block. |
 | `ccplan rm <id>` | Remove a pending block. |
 | `ccplan done <id>` / `ccplan skip <id>` | Mark a block complete / skipped. |
-| `ccplan clear --yes` | Archive the day and remove its triggers (`--purge` to delete instead of archive). |
+| `ccplan clear --yes` | Archive the day and remove its triggers (`--purge` to delete instead). |
 
-**Reading** (all support `--json`)
+**Reading** — all support `--json`
 
 | Command | Returns |
 |---|---|
@@ -220,11 +164,15 @@ status   = "pending"
 | Command | Purpose |
 |---|---|
 | `ccplan apply [--dry-run]` | Reconcile OS triggers to match the plan (idempotent). |
-| `ccplan status` | Scheduler health: counts of tracked vs. live OS triggers. |
+| `ccplan status` | Scheduler health: tracked vs. live OS triggers. |
 | `ccplan doctor` | Check the native scheduler + notifier are usable; print fixes. |
-| `ccplan completions <shell>` | Print shell completions. |
+| `ccplan completions <shell>` | Print shell completions (bash/zsh/fish/powershell). |
 
-(`ccplan fire …` exists but is internal — it's what the OS invokes when a block triggers.)
+`ccplan fire …` exists but is internal — it's what the OS invokes when a block triggers.
+
+**Exit codes:** `0` ok · `2` usage/validation · `3` not found · `4` scheduler failure ·
+`5` automation refused · `6` history conflict (needs `--override-history`). No command is ever
+interactive; destructive ones require an explicit flag (`--yes`, `--override-history`).
 
 ---
 
@@ -233,7 +181,7 @@ status   = "pending"
 `~/.config/ccplan/config.toml` (Linux paths shown):
 
 ```toml
-grace = "90s"                      # how late a trigger may fire before it's treated as missed
+grace = "90s"                      # how late a trigger may fire before it counts as missed
 
 [automation]
 enabled = false                    # per-block `run:` is OFF by default
@@ -243,7 +191,7 @@ allowed_executables = [            # `run:`'s argv[0] must be an absolute path o
 ]
 
 [notify]
-default_lead = "5m"                # notify lead applied to a block that omits its own `notify`
+default_lead = "5m"                # lead applied to a block that omits its own `notify`
 ```
 
 ---
@@ -258,25 +206,25 @@ default_lead = "5m"                # notify lead applied to a block that omits i
 
 1. **Store** — the per-day TOML plan is the single source of truth.
 2. **Compile** — `apply` reconciles the plan into native one-shot OS triggers, one per event
-   (`notify` / `start` / `end`). Each trigger embeds a **schedule `rev`** (a hash of the block's
-   timing) so that re-planned or deleted triggers become inert.
-3. **Fire** — when a trigger fires, the OS runs `ccplan fire …`, which checks the trigger is still
-   current and on-time (a durable ledger guarantees it acts **at most once**), then notifies, runs
-   the command if any, and advances the block's status.
+   (`notify` / `start` / `end`). Each embeds a schedule **`rev`** (a hash of the block's timing), so
+   re-planned or deleted triggers go inert.
+3. **Fire** — when a trigger fires, the OS runs `ccplan fire …`, which checks it's still current and
+   on time (a durable ledger guarantees it acts **at most once**), then notifies, runs the command if
+   any, and advances the block's status.
 
-There is **no background daemon** — `ccplan` leans on each OS's own scheduler (systemd user timers,
-launchd agents, Windows Task Scheduler), so alerts fire even when `ccplan` isn't running.
+There is **no background daemon** — ccplan leans on each OS's own scheduler, so alerts fire even when
+ccplan isn't running.
 
 ---
 
 ## Security model
 
-`run:` lets a block execute a command, so the plan file is a **trust boundary**. `ccplan` defends it:
+`run:` lets a block execute a command, so the plan file is a **trust boundary**. ccplan defends it:
 
 - Automation is **off by default**; you opt in via config.
 - A command's executable must be an **absolute path on an allowlist** — nothing else runs.
-- Commands run as an **argv vector with no shell** (no `sh -c`), so there's no shell-injection surface.
-- The plan file must be **owned by you and not world-writable**, or `ccplan` refuses to run its commands.
+- Commands run as an **argv vector with no shell** (no `sh -c`) — no shell-injection surface.
+- The plan file must be **owned by you and not world-writable**, or ccplan refuses to run its commands.
 - Every fire is **logged**, runs **at most once**, and is **time-bounded**.
 
 See [`SECURITY.md`](SECURITY.md) for the threat model and how to report issues.
@@ -289,10 +237,9 @@ See [`SECURITY.md`](SECURITY.md) for the threat model and how to report issues.
 |---|:---:|:---:|:---:|
 | Scheduling | systemd `--user` timers | launchd LaunchAgents | Task Scheduler |
 | Notifications | libnotify / D-Bus | NSUserNotification | WinRT toast |
-| Notification action buttons | planned | — | — |
 
 A graphical login session is required for notifications (the usual desktop case). Headless use still
-schedules and runs automation; `doctor` tells you what's available.
+schedules and runs automation; `ccplan doctor` tells you what's available.
 
 ---
 
@@ -307,17 +254,19 @@ cargo build --release
 ./target/release/ccplan --help
 ```
 
+Design notes and invariants live in [`DESIGN.md`](DESIGN.md).
+
 ---
 
 ## Contributing
 
-Contributions welcome! See [`CONTRIBUTING.md`](CONTRIBUTING.md) and the coding standard in
-[`CONVENTIONS.md`](CONVENTIONS.md). In short: conventional-commit messages, `cargo fmt` +
-`cargo clippy -- -D warnings` clean, no `unsafe`, tests for every change, and the coverage gate stays
+Contributions welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md) and the coding standard in
+[`CONVENTIONS.md`](CONVENTIONS.md). In short: conventional-commit messages; `cargo fmt` and
+`cargo clippy -- -D warnings` clean; no `unsafe`; tests for every change; the coverage gate stays
 at 100%.
 
 ## License
 
-Licensed under either of **[Apache License 2.0](LICENSE-APACHE)** or **[MIT license](LICENSE-MIT)**
-at your option. Unless you explicitly state otherwise, any contribution you submit shall be
-dual-licensed as above, without additional terms.
+Licensed under either [Apache License 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your
+option. Unless you state otherwise, any contribution you submit shall be dual-licensed as above,
+without additional terms.
