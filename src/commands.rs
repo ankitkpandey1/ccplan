@@ -62,11 +62,21 @@ pub fn dispatch(
 
 fn set(args: SetArgs, out: &mut dyn Write, context: &ContextRefs<'_>) -> Result<()> {
     let input = read_plan_input(&args.from)?;
-    let mut plan = Plan::from_toml_with_default(&input, context.config.notify.default_lead)?;
-    if let Some(date) = args.date {
+    set_from_str(&input, args.date, args.override_history, out, context)
+}
+
+pub(crate) fn set_from_str(
+    input: &str,
+    date: Option<PlanDate>,
+    override_history: bool,
+    out: &mut dyn Write,
+    context: &ContextRefs<'_>,
+) -> Result<()> {
+    let mut plan = Plan::from_toml_with_default(input, context.config.notify.default_lead)?;
+    if let Some(date) = date {
         plan.date = date;
     }
-    let policy = if args.override_history {
+    let policy = if override_history {
         HistoryPolicy::Override
     } else {
         HistoryPolicy::Preserve
