@@ -1,0 +1,30 @@
+name: Bug report
+description: Report a reproducible ccplan problem.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Include the exact commands and plan/config snippets.
+      placeholder: |
+        ccplan --version
+        ccplan doctor
+        ccplan show --json
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, shell, install method, and scheduler backend.
+    validations:
+      required: true

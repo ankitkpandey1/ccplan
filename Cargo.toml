@@ -1,0 +1,107 @@
+[package]
+name = "ccplan"
+version = "1.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+authors = ["Ankit Pandey <itsankitkp@gmail.com>"]
+description = "Agent-authorable cross-platform CLI day planner with native time triggers."
+homepage = "https://github.com/ankitkpandey1/cc-planner"
+repository = "https://github.com/ankitkpandey1/cc-planner"
+readme = "README.md"
+keywords = ["cli", "planner", "scheduler", "productivity"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "ccplan"
+path = "src/main.rs"
+
+[[bin]]
+name = "ccplan-fire"
+path = "src/bin/ccplan-fire.rs"
+
+[workspace]
+members = ["."]
+resolver = "3"
+
+[dependencies]
+anyhow = "1"
+blake3 = "1"
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+directories = "6"
+fs2 = "0.4"
+jiff = { version = "0.2", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+toml = "1"
+
+[dev-dependencies]
+assert_cmd = "2"
+assert_fs = "1"
+predicates = "3"
+proptest = { version = "1", default-features = false, features = ["std"] }
+
+[build-dependencies]
+clap = "4"
+clap_complete = "4"
+clap_mangen = "0.3"
+
+[features]
+default = []
+test-fakes = []
+
+[package.metadata.binstall]
+pkg-url = "https://github.com/ankitkpandey1/cc-planner/releases/download/v{ version }/ccplan-{ target }.{ archive-format }"
+pkg-fmt = "txz"
+bin-dir = "ccplan-{ target }/{ bin }{ binary-ext }"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
+
+[package.metadata.wix]
+upgrade-guid = "14E161B0-5CD9-4306-9814-18C83E7B5490"
+path-guid = "D2DA3460-832E-4D94-845F-3FBFBDD87565"
+license = false
+eula = false
+
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
+[workspace.metadata.dist]
+cargo-dist-version = "0.32.0"
+ci = ["github"]
+installers = ["shell", "powershell", "homebrew", "msi"]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]
+hosting = "github"
+install-path = "CARGO_HOME"
+tap = "ankitkpandey1/homebrew-tap"
+publish-jobs = ["homebrew"]
+
+[[workspace.metadata.dist.extra-artifacts]]
+artifacts = [
+    "target/dist-assets/completions/ccplan.bash",
+    "target/dist-assets/completions/_ccplan",
+    "target/dist-assets/completions/ccplan.fish",
+    "target/dist-assets/completions/_ccplan.ps1",
+    "target/dist-assets/man/ccplan.1",
+]
+build = ["bash", "scripts/build-release-assets.sh"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage,coverage_nightly)'] }
+
+[target.'cfg(unix)'.dependencies]
+# Safe `getuid` for the run: automation plan-file ownership check (no subprocess, no unsafe).
+rustix = { version = "1", features = ["process"] }
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+notify-rust = { version = "4", default-features = false, features = ["d_vendored"] }
