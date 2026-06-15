@@ -6,6 +6,16 @@ This project follows Keep a Changelog and uses Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **`ccplan mcp`**: synchronous JSON-RPC 2.0 MCP server over stdio. Exposes 11 tools:
+  `ccplan_plan_day`, `ccplan_apply`, `ccplan_show_plan`, `ccplan_list_now`, `ccplan_list_next`,
+  `ccplan_show_agenda`, `ccplan_add_block`, `ccplan_add_reminder`, `ccplan_mark_block`,
+  `ccplan_edit_block`, `ccplan_remove_block`. No new runtime dependencies — hand-rolled over
+  `serde_json`. Security: `fire`, `mcp`, and `completions` are not exposed as tools; no tool
+  can set `automation.enabled` or modify the allowlist; authoring-time `run:` warnings fire
+  when automation is disabled or the executable isn't allowlisted.
+
 ## [1.1.0] - 2026-06-15
 
 ### Added

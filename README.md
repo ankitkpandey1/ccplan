@@ -179,6 +179,44 @@ interactive; destructive ones require an explicit flag (`--yes`, `--override-his
 
 ---
 
+## MCP server
+
+`ccplan mcp` starts a synchronous [Model Context Protocol](https://modelcontextprotocol.io)
+server over stdio (JSON-RPC 2.0, newline-delimited). Wire it into any MCP host:
+
+```json
+{
+  "mcpServers": {
+    "ccplan": {
+      "command": "ccplan",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+**Exposed tools** (11 total):
+
+| Tool | What it does |
+|---|---|
+| `ccplan_plan_day` | Replace the whole day from a JSON blocks array |
+| `ccplan_apply` | Reconcile OS triggers to match the current plan |
+| `ccplan_show_plan` | Return the full plan as JSON |
+| `ccplan_list_now` | Blocks active right now (`[]` if none) |
+| `ccplan_list_next` | Next upcoming block(s) (`[]` if none) |
+| `ccplan_show_agenda` | Remaining blocks with countdowns |
+| `ccplan_add_block` | Add or update one block |
+| `ccplan_add_reminder` | One-shot relative reminder (add + apply) |
+| `ccplan_mark_block` | Mark a block done or skipped |
+| `ccplan_edit_block` | Patch title, time, notify, or run on a non-terminal block |
+| `ccplan_remove_block` | Remove a pending block |
+
+`fire`, `mcp`, and `completions` are **never** exposed as MCP tools. No tool can modify
+`automation.enabled` or the allowlist. When a `run:` command is stored but would not execute
+(automation disabled or executable not allowlisted), the tool result includes a `WARNING` line.
+
+---
+
 ## Configuration
 
 `~/.config/ccplan/config.toml` (Linux paths shown):

@@ -67,6 +67,24 @@ JSON contract:
 - Empty query results are `[]`, not an error.
 <!-- ccplan-agent-recipe:end -->
 
+## MCP Server
+
+`ccplan mcp` runs a JSON-RPC 2.0 MCP server over stdio. Wire it up in your host's config:
+
+```json
+{
+  "mcpServers": {
+    "ccplan": { "command": "ccplan", "args": ["mcp"] }
+  }
+}
+```
+
+The server exposes 11 tools: `ccplan_plan_day`, `ccplan_apply`, `ccplan_show_plan`,
+`ccplan_list_now`, `ccplan_list_next`, `ccplan_show_agenda`, `ccplan_add_block`,
+`ccplan_add_reminder`, `ccplan_mark_block`, `ccplan_edit_block`, `ccplan_remove_block`.
+
+`fire`, `mcp`, and `completions` are never exposed as MCP tools.
+
 ## Smoke-Test Plan
 
 <!-- ccplan-test-plan:start -->

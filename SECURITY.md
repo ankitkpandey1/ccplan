@@ -16,6 +16,7 @@ notifications, and can run per-block commands. The most sensitive surfaces are:
 - `allowed_executables` policy in `config.toml`.
 - Scheduler trigger generation and at-most-once fire behavior.
 - Atomic plan, history, trigger, and fire-ledger writes.
+- MCP server tool surface (`ccplan mcp`).
 
 ## Automation Policy
 
@@ -23,6 +24,16 @@ Plan files never execute through a shell. `run:` is an argv array, and the execu
 by `automation.allowed_executables` unless automation is disabled. Reports that bypass the
 allow-list, invoke a shell implicitly, or mutate terminal history without explicit override are
 security issues.
+
+## MCP Security Model
+
+The `ccplan mcp` server exposes 11 authoring and read tools. The following invariants hold:
+
+- `fire`, `mcp`, and `completions` are never exposed as MCP tools.
+- No MCP tool sets `automation.enabled` or modifies the allowlist.
+- No MCP tool calls `authorize_run`; automation is enforced at `fire` time only.
+- When a `run:` command is stored via MCP but would not execute (automation disabled or executable
+  not in the allowlist), the tool response includes a `WARNING` line so the caller knows up front.
 
 ## Dependency Policy
 
