@@ -6,6 +6,17 @@ This project follows Keep a Changelog and uses Semantic Versioning.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-06-15
+
+### Added
+
+- **`ccplan remind "<text>" --in <duration>`**: one-shot relative reminder. Sugar over `add` +
+  `apply` — it resolves `now + duration` in the clock's time zone (minute granularity), creates a
+  zero-lead block so the only alert is the `start` event firing exactly at the target, and
+  auto-applies so the OS trigger goes live in one step. `--in` accepts `1h` / `30m` / `1h30m`
+  (max 24h); a reminder that crosses midnight lands in the next day's plan. Same upsert and
+  terminal-history rules as `add` (`--id` to override the auto-slugged id).
+
 ## [1.0.0] - 2026-06-15
 
 The first public release.
