@@ -73,7 +73,7 @@ lto = "thin"
 [workspace.metadata.dist]
 cargo-dist-version = "0.32.0"
 ci = ["github"]
-installers = ["shell", "powershell", "homebrew", "msi"]
+installers = ["shell", "powershell", "msi"]
 targets = [
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",
@@ -83,8 +83,6 @@ targets = [
 ]
 hosting = "github"
 install-path = "CARGO_HOME"
-tap = "ankitkpandey1/homebrew-tap"
-publish-jobs = ["homebrew"]
 
 [[workspace.metadata.dist.extra-artifacts]]
 artifacts = [
