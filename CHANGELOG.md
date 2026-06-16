@@ -6,6 +6,8 @@ This project follows Keep a Changelog and uses Semantic Versioning.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-06-16
+
 ### Added
 
 - **`ccplan mcp`**: synchronous JSON-RPC 2.0 MCP server over stdio. Exposes 16 tools:
