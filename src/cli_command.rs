@@ -26,6 +26,7 @@ pub(crate) fn command() -> Command {
         .subcommand(apply_command())
         .subcommand(fire_command())
         .subcommand(log_command())
+        .subcommand(template_command())
         .subcommand(Command::new("status"))
         .subcommand(Command::new("doctor"))
         .subcommand(completions_command())
@@ -125,6 +126,19 @@ fn log_command() -> Command {
         .arg(date_arg())
         .arg(Arg::new("since").long("since"))
         .arg(flag("json", "json"))
+}
+
+fn template_command() -> Command {
+    Command::new("template")
+        .subcommand(template_name_command("save"))
+        .subcommand(Command::new("list"))
+        .subcommand(template_name_command("apply"))
+}
+
+fn template_name_command(name: &'static str) -> Command {
+    Command::new(name)
+        .arg(Arg::new("name").required(true).value_name("NAME"))
+        .arg(date_arg())
 }
 
 fn completions_command() -> Command {

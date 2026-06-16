@@ -38,6 +38,7 @@ pub enum Commands {
     Apply(ApplyArgs),
     Fire(FireArgs),
     Log(LogArgs),
+    Template(TemplateArgs),
     Status,
     Doctor,
     Completions(CompletionsArgs),
@@ -187,6 +188,31 @@ pub struct LogArgs {
     pub since: Option<Timestamp>,
     #[arg(long)]
     pub json: bool,
+}
+
+/// `template` saves and instantiates reusable day shapes — capture a good day once, then stamp it
+/// onto any date (statuses reset to pending) and apply, instead of re-authoring it each morning.
+#[derive(Debug, Args)]
+pub struct TemplateArgs {
+    #[command(subcommand)]
+    pub command: TemplateCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TemplateCommand {
+    /// Save the plan for a date as a named template.
+    Save(TemplateNameArgs),
+    /// List saved template names.
+    List,
+    /// Instantiate a template onto a date (resets statuses to pending) and apply it.
+    Apply(TemplateNameArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct TemplateNameArgs {
+    pub name: String,
+    #[arg(long)]
+    pub date: Option<PlanDate>,
 }
 
 #[derive(Debug, Args)]

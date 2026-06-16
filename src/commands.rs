@@ -16,7 +16,8 @@ use serde::Serialize;
 use crate::{
     cli::{
         AddArgs, AgendaArgs, ApplyArgs, ClearArgs, Cli, Commands, EditArgs, FireArgs, LogArgs,
-        ReadArgs, RemindArgs, SetArgs, Shell, SnoozeArgs,
+        ReadArgs, RemindArgs, SetArgs, Shell, SnoozeArgs, TemplateArgs, TemplateCommand,
+        TemplateNameArgs,
     },
     config::AutomationConfig,
     context::{ContextRefs, Notification, Scheduler},
@@ -53,6 +54,7 @@ pub fn dispatch(
         Some(Commands::Apply(args)) => apply(args, out, context),
         Some(Commands::Fire(args)) => fire(&args, out, context),
         Some(Commands::Log(args)) => fire_log(args, out, context),
+        Some(Commands::Template(args)) => template(args, out, context),
         Some(Commands::Status) => status(out, context),
         Some(Commands::Doctor) => doctor(out, context),
         Some(Commands::Completions(args)) => {
@@ -311,6 +313,94 @@ fn snooze_clock(time: ClockTime, by_minutes: u32) -> Result<ClockTime> {
                 "snooze would move {time} past midnight; keep the block within the same day"
             ))
         })
+}
+
+/// Dispatches the `template` subcommands (save / list / apply).
+fn template(args: TemplateArgs, out: &mut dyn Write, context: &ContextRefs<'_>) -> Result<()> {
+    match args.command {
+        TemplateCommand::Save(name_args) => template_save(name_args, out, context),
+        TemplateCommand::List => template_list(out, context),
+        TemplateCommand::Apply(name_args) => template_apply(name_args, out, context),
+    }
+}
+
+/// Saves the plan for a date as a named, reusable template (its plain TOML).
+fn template_save(
+    args: TemplateNameArgs,
+    out: &mut dyn Write,
+    context: &ContextRefs<'_>,
+) -> Result<()> {
+    let name = validate_template_name(&args.name)?;
+    let date = args.date.unwrap_or_else(|| today(context));
+    let plan = load_required(context.store, &date, context.config.notify.default_lead)?;
+    context.store.save_template(&name, &plan.to_toml()?)?;
+    writeln!(out, "saved template {name} from {date}")?;
+    Ok(())
+}
+
+/// Lists saved template names, one per line (or a plain-language line when none exist).
+fn template_list(out: &mut dyn Write, context: &ContextRefs<'_>) -> Result<()> {
+    let names = context.store.list_templates()?;
+    if names.is_empty() {
+        writeln!(out, "no templates saved")?;
+    } else {
+        for name in names {
+            writeln!(out, "{name}")?;
+        }
+    }
+    Ok(())
+}
+
+/// Instantiates a template onto a date and applies it.
+///
+/// The stored shape is stamped with the target date and every block is reset to `pending`, so a
+/// template captured from a lived-in day starts fresh. Persisting uses the preserve-history policy
+/// like `set`, so instantiating over a day that already holds terminal blocks is refused (exit 6)
+/// rather than silently erasing history.
+fn template_apply(
+    args: TemplateNameArgs,
+    out: &mut dyn Write,
+    context: &ContextRefs<'_>,
+) -> Result<()> {
+    let name = validate_template_name(&args.name)?;
+    let date = args.date.unwrap_or_else(|| today(context));
+    let toml = context
+        .store
+        .load_template(&name)?
+        .ok_or_else(|| Error::NotFound(format!("template `{name}`")))?;
+    let mut plan = Plan::from_toml_with_default(&toml, context.config.notify.default_lead)?;
+    plan.date = date.clone();
+    for block in &mut plan.blocks {
+        block.status = Status::Pending;
+    }
+    persist_plan(context, &plan)?;
+    writeln!(out, "applied template {name} to {date}")?;
+    apply(
+        ApplyArgs {
+            date: Some(date),
+            dry_run: false,
+        },
+        out,
+        context,
+    )
+}
+
+/// Validates a template name is a safe slug: non-empty, only ASCII letters, digits, `-` or `_`.
+///
+/// This is the path-traversal guard — rejecting `/`, `.`, and `..` keeps `template_path` from
+/// escaping the templates directory.
+fn validate_template_name(name: &str) -> Result<String> {
+    if !name.is_empty()
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    {
+        Ok(name.to_owned())
+    } else {
+        Err(Error::Usage(format!(
+            "template name must be non-empty and use only letters, digits, '-' or '_': {name:?}"
+        )))
+    }
 }
 
 fn clear(args: ClearArgs, out: &mut dyn Write, context: &ContextRefs<'_>) -> Result<()> {

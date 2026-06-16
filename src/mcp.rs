@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use crate::{
     cli::{
         AddArgs, AgendaArgs, ApplyArgs, BlockTarget, Commands, EditArgs, LogArgs, ReadArgs,
-        RemindArgs, SnoozeArgs,
+        RemindArgs, SnoozeArgs, TemplateArgs, TemplateCommand, TemplateNameArgs,
     },
     commands::{self, set_from_str, slug_block_id},
     config::{AutomationConfig, Config},
@@ -221,6 +221,9 @@ fn call_tool(name: &str, args: &Value, context: &ContextRefs<'_>) -> Value {
         "ccplan_edit_block" => invoke_edit_block(args, context),
         "ccplan_remove_block" => invoke_remove_block(args, context),
         "ccplan_snooze_block" => invoke_snooze_block(args, context),
+        "ccplan_save_template" => invoke_save_template(args, context),
+        "ccplan_list_templates" => invoke_list_templates(args, context),
+        "ccplan_apply_template" => invoke_apply_template(args, context),
         "ccplan_fire_log" => invoke_fire_log(args, context),
         _ => tool_error(&json!({
             "error": "unknown_tool",
@@ -339,6 +342,51 @@ fn invoke_show_agenda(args: &Value, context: &ContextRefs<'_>) -> Value {
         json: true,
     });
     invoke_read_cmd(cmd, context)
+}
+
+fn invoke_save_template(args: &Value, context: &ContextRefs<'_>) -> Value {
+    match template_name_cmd(args, "save_template", TemplateCommand::Save, context) {
+        Ok(text) => tool_ok(&text),
+        Err(e) => tool_error_from_err(&e),
+    }
+}
+
+fn invoke_apply_template(args: &Value, context: &ContextRefs<'_>) -> Value {
+    match template_name_cmd(args, "apply_template", TemplateCommand::Apply, context) {
+        Ok(text) => tool_ok(&text),
+        Err(e) => tool_error_from_err(&e),
+    }
+}
+
+fn invoke_list_templates(_args: &Value, context: &ContextRefs<'_>) -> Value {
+    let cmd = Commands::Template(TemplateArgs {
+        command: TemplateCommand::List,
+    });
+    invoke_read_cmd(cmd, context)
+}
+
+/// Shared body for the `save`/`apply` template tools: both take `name` (+ optional `date`) and wrap
+/// it in the matching `TemplateCommand` variant.
+fn template_name_cmd(
+    args: &Value,
+    tool: &str,
+    variant: fn(TemplateNameArgs) -> TemplateCommand,
+    context: &ContextRefs<'_>,
+) -> Result<String> {
+    let name = args
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::Usage(format!("{tool} requires 'name'")))?
+        .to_owned();
+    let cmd = Commands::Template(TemplateArgs {
+        command: variant(TemplateNameArgs {
+            name,
+            date: extract_date(args),
+        }),
+    });
+    let mut out = Vec::new();
+    commands::dispatch(Some(cmd), &mut out, context)?;
+    Ok(String::from_utf8_lossy(&out).into_owned())
 }
 
 /// Read-only close-the-loop tool: returns the fire ledger so the agent can see what the scheduler
@@ -873,6 +921,9 @@ fn tool_catalog() -> Vec<Value> {
         edit_block_schema(),
         remove_block_schema(),
         snooze_block_schema(),
+        save_template_schema(),
+        list_templates_schema(),
+        apply_template_schema(),
         fire_log_schema(),
     ]
 }
@@ -1152,6 +1203,44 @@ fn snooze_block_schema() -> Value {
                 "date": {"type": "string", "description": "ISO date YYYY-MM-DD. Defaults to today."}
             },
             "required": ["id", "by"]
+        }
+    })
+}
+
+fn save_template_schema() -> Value {
+    json!({
+        "name": "ccplan_save_template",
+        "description": "Save the plan for a date as a named, reusable day template. Capture a good day shape once, then stamp it onto future dates with ccplan_apply_template. Name must be a slug (letters, digits, '-', '_').",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Template name (letters, digits, '-', '_')."},
+                "date": {"type": "string", "description": "ISO date YYYY-MM-DD to capture. Defaults to today."}
+            },
+            "required": ["name"]
+        }
+    })
+}
+
+fn list_templates_schema() -> Value {
+    json!({
+        "name": "ccplan_list_templates",
+        "description": "List saved day-template names, one per line. Returns 'no templates saved' when none exist. Read-only.",
+        "inputSchema": {"type": "object", "properties": {}}
+    })
+}
+
+fn apply_template_schema() -> Value {
+    json!({
+        "name": "ccplan_apply_template",
+        "description": "Instantiate a saved template onto a date (every block reset to pending) and apply it, arming OS triggers. Like ccplan_plan_day, instantiating over a day with terminal (done/skipped/missed/expired) blocks is refused.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Template name to instantiate."},
+                "date": {"type": "string", "description": "ISO date YYYY-MM-DD. Defaults to today."}
+            },
+            "required": ["name"]
         }
     })
 }
@@ -2497,12 +2586,12 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_contains_all_thirteen_tools() {
+    fn tools_list_contains_all_sixteen_tools() {
         let (_temp, context) = test_context();
         let input = req(1, "tools/list", json!({}));
         let responses = run_serve(&context, input.as_bytes());
         let tools = responses[0]["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 13);
+        assert_eq!(tools.len(), 16);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         for expected in &[
             "ccplan_plan_day",
@@ -2517,6 +2606,9 @@ mod tests {
             "ccplan_edit_block",
             "ccplan_remove_block",
             "ccplan_snooze_block",
+            "ccplan_save_template",
+            "ccplan_list_templates",
+            "ccplan_apply_template",
             "ccplan_fire_log",
         ] {
             assert!(names.contains(expected), "missing tool: {expected}");
@@ -2634,6 +2726,87 @@ mod tests {
             .as_str()
             .unwrap();
         assert!(err.contains("snooze_block requires 'id'"), "{err}");
+    }
+
+    #[test]
+    fn template_tools_save_list_and_instantiate() {
+        let (_temp, context) = test_context();
+        let plan = Plan {
+            date: "2026-06-08".parse::<PlanDate>().unwrap(),
+            timezone: "Asia/Kolkata".parse::<TimeZoneName>().unwrap(),
+            blocks: vec![Block {
+                id: "focus".parse::<BlockId>().unwrap(),
+                title: "Focus".to_owned(),
+                start: "14:00".parse::<ClockTime>().unwrap(),
+                span: Span::Duration(DurationSpec::from_seconds(1800).unwrap()),
+                notify: Lead::from_seconds(0).unwrap(),
+                tags: vec![],
+                status: Status::Pending,
+                run: None,
+            }],
+        };
+        context
+            .store
+            .set_plan(&plan, HistoryPolicy::Preserve)
+            .unwrap();
+
+        let mut input = notif("notifications/initialized");
+        input.push_str(&req(
+            1,
+            "tools/call",
+            json!({"name": "ccplan_save_template", "arguments": {"name": "weekday"}}),
+        ));
+        input.push_str(&req(
+            2,
+            "tools/call",
+            json!({"name": "ccplan_list_templates", "arguments": {}}),
+        ));
+        input.push_str(&req(
+            3,
+            "tools/call",
+            json!({"name": "ccplan_apply_template", "arguments": {"name": "weekday", "date": "2026-06-09"}}),
+        ));
+        input.push_str(&req(
+            4,
+            "tools/call",
+            json!({"name": "ccplan_show_plan", "arguments": {"date": "2026-06-09"}}),
+        ));
+        input.push_str(&req(
+            5,
+            "tools/call",
+            json!({"name": "ccplan_save_template", "arguments": {}}),
+        ));
+        input.push_str(&req(
+            6,
+            "tools/call",
+            json!({"name": "ccplan_apply_template", "arguments": {"name": "ghost"}}),
+        ));
+        let responses = run_serve(&context, input.as_bytes());
+
+        assert_eq!(responses[0]["result"]["isError"], false);
+        let listed = responses[1]["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap();
+        assert!(listed.contains("weekday"), "{listed}");
+        assert_eq!(responses[2]["result"]["isError"], false);
+        // The template was instantiated onto the new date.
+        let shown = responses[3]["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap();
+        assert!(shown.contains("\"focus\""), "{shown}");
+        assert!(shown.contains("2026-06-09"), "{shown}");
+        // Missing required `name` is a structured error.
+        assert_eq!(responses[4]["result"]["isError"], true);
+        let err = responses[4]["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap();
+        assert!(err.contains("save_template requires 'name'"), "{err}");
+        // Applying a template that does not exist is a structured not_found error.
+        assert_eq!(responses[5]["result"]["isError"], true);
+        let missing = responses[5]["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap();
+        assert!(missing.contains("not_found"), "{missing}");
     }
 
     // --- Security / M4 tests ---

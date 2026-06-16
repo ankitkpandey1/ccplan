@@ -8,10 +8,11 @@ This project follows Keep a Changelog and uses Semantic Versioning.
 
 ### Added
 
-- **`ccplan mcp`**: synchronous JSON-RPC 2.0 MCP server over stdio. Exposes 13 tools:
+- **`ccplan mcp`**: synchronous JSON-RPC 2.0 MCP server over stdio. Exposes 16 tools:
   `ccplan_plan_day`, `ccplan_apply`, `ccplan_show_plan`, `ccplan_list_now`, `ccplan_list_next`,
   `ccplan_show_agenda`, `ccplan_add_block`, `ccplan_add_reminder`, `ccplan_mark_block`,
-  `ccplan_edit_block`, `ccplan_remove_block`, `ccplan_snooze_block`, `ccplan_fire_log`. No new runtime dependencies —
+  `ccplan_edit_block`, `ccplan_remove_block`, `ccplan_snooze_block`, `ccplan_save_template`,
+  `ccplan_list_templates`, `ccplan_apply_template`, `ccplan_fire_log`. No new runtime dependencies —
   hand-rolled over `serde_json`. Security: `fire`, `mcp`, and `completions` are not exposed as
   tools; no tool can set `automation.enabled` or modify the allowlist; authoring-time `run:`
   warnings fire when automation is disabled or the executable isn't allowlisted.
@@ -22,6 +23,11 @@ This project follows Keep a Changelog and uses Semantic Versioning.
 - **`ccplan snooze <id> --by <dur>`** (and the `ccplan_snooze_block` MCP tool): push a non-terminal
   block later by a duration and re-apply in one step — react to a fire by sliding the block instead
   of recomputing absolute times. Refused if the slide would cross midnight (no day rollover).
+- **`ccplan template save|list|apply`** (and the `ccplan_save_template` / `ccplan_list_templates` /
+  `ccplan_apply_template` MCP tools): reusable day templates. Capture a day shape once, then stamp it
+  onto any date (every block reset to pending) and apply it in one step. Template names are validated
+  as safe slugs (path-traversal guard). Instantiating over a day with terminal history is refused,
+  like `set`.
 
 ### Changed
 

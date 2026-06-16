@@ -27,7 +27,7 @@ security issues.
 
 ## MCP Security Model
 
-The `ccplan mcp` server exposes 13 authoring and read tools. The following invariants hold:
+The `ccplan mcp` server exposes 16 authoring and read tools. The following invariants hold:
 
 - `fire`, `mcp`, and `completions` are never exposed as MCP tools.
 - No MCP tool sets `automation.enabled` or modifies the allowlist.

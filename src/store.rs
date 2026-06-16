@@ -1,6 +1,7 @@
 //! Atomic filesystem storage for plans, trigger records, and fired-event state.
 
 use std::{
+    ffi::OsStr,
     fs::{self, File, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
@@ -90,6 +91,56 @@ impl Store {
             records.push(map_json_result(serde_json::from_str(line), &path)?);
         }
         Ok(records)
+    }
+
+    /// Filesystem path of a named day template (a stored plan TOML). The caller must validate `name`
+    /// is a safe slug — this method does not sanitize path components.
+    #[must_use]
+    pub fn template_path(&self, name: &str) -> PathBuf {
+        self.templates_dir().join(format!("{name}.toml"))
+    }
+
+    /// Saves `contents` (a plan TOML) under template `name`, replacing any existing template.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError`] if the template directory or file cannot be written.
+    pub fn save_template(&self, name: &str, contents: &str) -> Result<(), StoreError> {
+        atomic_write(&self.template_path(name), contents.as_bytes())
+    }
+
+    /// Reads a named template's raw TOML, or `None` if no such template exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError`] if the template file exists but cannot be read.
+    pub fn load_template(&self, name: &str) -> Result<Option<String>, StoreError> {
+        read_state_file(&self.template_path(name))
+    }
+
+    /// Lists saved template names (file stems), sorted. A missing directory is an empty list.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError`] if the template directory exists but cannot be read.
+    pub fn list_templates(&self) -> Result<Vec<String>, StoreError> {
+        let dir = self.templates_dir();
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(source) => return Err(io_error(&dir, source)),
+        };
+        let mut names = Vec::new();
+        for entry in entries {
+            let path = map_io_result(entry, &dir)?.path();
+            if path.extension().and_then(OsStr::to_str) == Some("toml")
+                && let Some(stem) = path.file_stem().and_then(OsStr::to_str)
+            {
+                names.push(stem.to_owned());
+            }
+        }
+        names.sort();
+        Ok(names)
     }
 
     /// Acquires the store's exclusive mutation lock.
@@ -389,6 +440,10 @@ impl Store {
 
     fn log_dir(&self) -> PathBuf {
         self.data.join("log")
+    }
+
+    fn templates_dir(&self) -> PathBuf {
+        self.data.join("templates")
     }
 
     fn lock_path(&self) -> PathBuf {
@@ -734,6 +789,44 @@ mod tests {
         ensure_parent(&path).unwrap();
         fs::write(&path, "not valid json\n").unwrap();
         assert!(store.read_fire_log().is_err());
+    }
+
+    #[test]
+    fn templates_round_trip_save_load_and_list() {
+        let temp = TempDir::new().unwrap();
+        let store = Store::new(temp.path());
+
+        // No directory yet: listing is empty, loading is None.
+        assert!(store.list_templates().unwrap().is_empty());
+        assert!(store.load_template("morning").unwrap().is_none());
+
+        store.save_template("morning", "date = \"x\"\n").unwrap();
+        store.save_template("evening", "date = \"y\"\n").unwrap();
+        // Re-saving replaces in place.
+        store.save_template("morning", "date = \"z\"\n").unwrap();
+        // A stray non-toml file in the directory is ignored by the listing.
+        fs::write(store.templates_dir().join("README.txt"), b"ignore me").unwrap();
+
+        assert_eq!(
+            store.load_template("morning").unwrap().as_deref(),
+            Some("date = \"z\"\n")
+        );
+        assert_eq!(
+            store.list_templates().unwrap(),
+            vec!["evening".to_owned(), "morning".to_owned()]
+        );
+    }
+
+    #[test]
+    fn list_templates_reports_io_error_when_dir_path_is_a_file() {
+        let temp = TempDir::new().unwrap();
+        let store = Store::new(temp.path());
+        // Block the templates directory with a regular file so read_dir fails with a
+        // non-NotFound error (NotADirectory), exercising the error arm.
+        ensure_parent(&store.templates_dir().join("placeholder")).unwrap();
+        fs::remove_dir(store.templates_dir()).unwrap();
+        fs::write(store.templates_dir(), b"not a directory").unwrap();
+        assert!(store.list_templates().is_err());
     }
 
     #[test]

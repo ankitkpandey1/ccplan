@@ -152,6 +152,7 @@ An agent authors the whole day in one shot by piping TOML into `ccplan set --fro
 | `ccplan rm <id>` | Remove a pending block. |
 | `ccplan done <id>` / `ccplan skip <id>` | Mark a block complete / skipped. |
 | `ccplan snooze <id> --by 10m` | Push a non-terminal block later and re-apply (refused if it would cross midnight). |
+| `ccplan template save\|apply <name> [--date]` / `ccplan template list` | Capture a day shape once, then stamp it onto any date (statuses reset, then applied). |
 | `ccplan clear --yes` | Archive the day and remove its triggers (`--purge` to delete instead). |
 
 **Reading** — all support `--json`
@@ -197,7 +198,7 @@ server over stdio (JSON-RPC 2.0, newline-delimited). Wire it into any MCP host:
 }
 ```
 
-**Exposed tools** (13 total):
+**Exposed tools** (16 total):
 
 | Tool | What it does |
 |---|---|
@@ -213,6 +214,9 @@ server over stdio (JSON-RPC 2.0, newline-delimited). Wire it into any MCP host:
 | `ccplan_edit_block` | Patch title, time, notify, or run on a non-terminal block |
 | `ccplan_remove_block` | Remove a pending block |
 | `ccplan_snooze_block` | Push a non-terminal block later by a duration and re-apply |
+| `ccplan_save_template` | Save the plan for a date as a named, reusable day template |
+| `ccplan_list_templates` | List saved template names |
+| `ccplan_apply_template` | Instantiate a template onto a date (statuses reset) and apply |
 | `ccplan_fire_log` | Read the fire ledger — what fired while you were away (`[]` if none) |
 
 **Close the loop.** `ccplan_fire_log` is the read side of the agent loop: the scheduler fires

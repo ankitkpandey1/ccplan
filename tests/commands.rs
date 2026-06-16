@@ -1260,6 +1260,80 @@ fn snooze_slides_blocks_later_reapplies_and_refuses_rollover() {
     ));
 }
 
+#[test]
+fn template_save_list_apply_round_trip_and_validation() {
+    let (_temp, context) = test_context_at("2026-06-08T10:00:00+05:30[Asia/Kolkata]");
+    context
+        .store
+        .set_plan(&plan(), HistoryPolicy::Preserve)
+        .unwrap();
+    // Mark one block done so the save captures a lived-in day; apply must reset it to pending.
+    run_ok(&context, ["ccplan", "done", "focus"]);
+
+    // Nothing saved yet.
+    assert_eq!(
+        String::from_utf8(run_ok(&context, ["ccplan", "template", "list"]))
+            .unwrap()
+            .trim(),
+        "no templates saved"
+    );
+
+    let saved =
+        String::from_utf8(run_ok(&context, ["ccplan", "template", "save", "weekday"])).unwrap();
+    assert!(
+        saved.contains("saved template weekday from 2026-06-08"),
+        "{saved}"
+    );
+    assert_eq!(
+        String::from_utf8(run_ok(&context, ["ccplan", "template", "list"]))
+            .unwrap()
+            .trim(),
+        "weekday"
+    );
+
+    // Instantiate onto a fresh date: blocks come back, all reset to pending, and triggers are armed.
+    let applied = String::from_utf8(run_ok(
+        &context,
+        [
+            "ccplan",
+            "template",
+            "apply",
+            "weekday",
+            "--date",
+            "2026-06-09",
+        ],
+    ))
+    .unwrap();
+    assert!(
+        applied.contains("applied template weekday to 2026-06-09"),
+        "{applied}"
+    );
+    let instantiated = context
+        .store
+        .load_plan(&"2026-06-09".parse::<PlanDate>().unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(instantiated.blocks.len(), 2);
+    assert!(
+        instantiated
+            .blocks
+            .iter()
+            .all(|b| b.status == Status::Pending)
+    );
+    assert!(!context.scheduler.calls().is_empty());
+
+    // An unsafe name is refused before it can touch the filesystem (path-traversal guard).
+    assert!(matches!(
+        run_err(&context, ["ccplan", "template", "save", "../escape"]),
+        Error::Usage(message) if message.contains("template name must be")
+    ));
+    // Applying a template that does not exist is a not-found error.
+    assert!(matches!(
+        run_err(&context, ["ccplan", "template", "apply", "ghost"]),
+        Error::NotFound(_)
+    ));
+}
+
 fn fire_args(id: &str, event: &str, rev: &str, at: &str) -> Vec<String> {
     vec![
         "ccplan".to_owned(),
