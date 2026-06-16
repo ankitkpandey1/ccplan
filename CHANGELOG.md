@@ -28,6 +28,10 @@ This project follows Keep a Changelog and uses Semantic Versioning.
   onto any date (every block reset to pending) and apply it in one step. Template names are validated
   as safe slugs (path-traversal guard). Instantiating over a day with terminal history is refused,
   like `set`.
+- **`ccplan watch [--every <dur>]`**: a live, auto-refreshing view of the agenda for leaving open in
+  a terminal. Read-only (no scheduling, no `--json`); redraws on the given interval (default `30s`,
+  max 24h) and quits on Ctrl-C or Enter. Not exposed as an MCP tool — agents poll `ccplan_show_agenda`
+  instead.
 
 ### Changed
 

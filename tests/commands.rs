@@ -38,6 +38,23 @@ fn mcp_subcommand_exits_cleanly_on_eof() {
 }
 
 #[test]
+fn watch_renders_a_frame_then_quits_on_eof() {
+    // Under the test harness stdin is closed, so watch's input-reader thread signals quit right
+    // after the first frame — this drives the real timer/input loop end-to-end without hanging,
+    // the same way `mcp` exits on EOF.
+    let (_temp, context) = test_context_at("2026-06-08T10:50:00+05:30[Asia/Kolkata]");
+    context
+        .store
+        .set_plan(&plan(), HistoryPolicy::Preserve)
+        .unwrap();
+
+    let output = String::from_utf8(run_ok(&context, ["ccplan", "watch", "--every", "1s"])).unwrap();
+
+    assert!(output.contains("ccplan watch ·"), "watch frame: {output}");
+    assert!(output.contains("Focus time"), "watch frame: {output}");
+}
+
+#[test]
 fn set_and_show_json_round_trip_with_fake_context() {
     let (_temp, context) = test_context_at("2026-06-08T10:00:00+05:30[Asia/Kolkata]");
     let input = context

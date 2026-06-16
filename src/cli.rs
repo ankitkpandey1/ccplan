@@ -35,6 +35,7 @@ pub enum Commands {
     Now(ReadArgs),
     Next(ReadArgs),
     Agenda(AgendaArgs),
+    Watch(WatchArgs),
     Apply(ApplyArgs),
     Fire(FireArgs),
     Log(LogArgs),
@@ -151,6 +152,17 @@ pub struct AgendaArgs {
     pub date: Option<PlanDate>,
     #[arg(long)]
     pub json: bool,
+}
+
+/// `watch` renders the live agenda and refreshes it on a timer until interrupted — a read-only
+/// dashboard over the same data as `agenda`, for leaving open in a terminal.
+#[derive(Debug, Args)]
+pub struct WatchArgs {
+    #[arg(long)]
+    pub date: Option<PlanDate>,
+    /// Refresh interval, e.g. `30s`, `1m`, `5m` (default `30s`, max 24h).
+    #[arg(long = "every", default_value = "30s")]
+    pub every: DurationSpec,
 }
 
 #[derive(Debug, Args)]

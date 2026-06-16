@@ -23,6 +23,7 @@ pub(crate) fn command() -> Command {
         .subcommand(read_command("now"))
         .subcommand(read_command("next"))
         .subcommand(read_command("agenda"))
+        .subcommand(watch_command())
         .subcommand(apply_command())
         .subcommand(fire_command())
         .subcommand(log_command())
@@ -98,6 +99,12 @@ fn clear_command() -> Command {
 
 fn read_command(name: &'static str) -> Command {
     Command::new(name).arg(date_arg()).arg(flag("json", "json"))
+}
+
+fn watch_command() -> Command {
+    Command::new("watch")
+        .arg(date_arg())
+        .arg(Arg::new("every").long("every").default_value("30s"))
 }
 
 fn apply_command() -> Command {

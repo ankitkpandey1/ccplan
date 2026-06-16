@@ -165,6 +165,9 @@ An agent authors the whole day in one shot by piping TOML into `ccplan set --fro
 | `ccplan agenda` | Remaining blocks with countdowns. |
 | `ccplan log [--date <d>] [--since <rfc3339>]` | The fire ledger — what the scheduler actually did (notify/activate/missed/close). |
 
+`ccplan watch [--every <dur>]` is a live, auto-refreshing view of the agenda for leaving open in a
+terminal (human-only, no `--json`; default refresh `30s`; Ctrl-C or Enter to quit).
+
 **System**
 
 | Command | Purpose |

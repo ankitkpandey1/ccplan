@@ -17,7 +17,7 @@ use crate::{
     cli::{
         AddArgs, AgendaArgs, ApplyArgs, ClearArgs, Cli, Commands, EditArgs, FireArgs, LogArgs,
         ReadArgs, RemindArgs, SetArgs, Shell, SnoozeArgs, TemplateArgs, TemplateCommand,
-        TemplateNameArgs,
+        TemplateNameArgs, WatchArgs,
     },
     config::AutomationConfig,
     context::{ContextRefs, Notification, Scheduler},
@@ -51,6 +51,7 @@ pub fn dispatch(
         Some(Commands::Now(args)) => now(args, out, context),
         Some(Commands::Next(args)) => next(args, out, context),
         Some(Commands::Agenda(args)) => agenda(args, out, context),
+        Some(Commands::Watch(args)) => watch(args, out, context),
         Some(Commands::Apply(args)) => apply(args, out, context),
         Some(Commands::Fire(args)) => fire(&args, out, context),
         Some(Commands::Log(args)) => fire_log(args, out, context),
@@ -498,6 +499,102 @@ fn agenda(args: AgendaArgs, out: &mut dyn Write, context: &ContextRefs<'_>) -> R
         blocks.push(AgendaEntry::new(block, starts_in_seconds));
     }
     write_read_rows(out, args.json, &blocks, "nothing left on today's agenda")
+}
+
+/// One terminal-clear escape (`ESC[2J`) plus cursor-home (`ESC[H`) — redraws a watch frame in place.
+const WATCH_CLEAR: &str = "\x1b[2J\x1b[H";
+
+/// What the refresh driver tells the [`watch_loop`] to do after a frame is drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WatchSignal {
+    /// Redraw the agenda (the timer elapsed).
+    Refresh,
+    /// Stop watching (the user interrupted, or input/EOF arrived).
+    Quit,
+}
+
+/// The loop's only side-effecting dependency: blocks until the next [`WatchSignal`]. Real watching
+/// waits on a timer and on terminal input (see `RealWatchClock`); tests inject a scripted driver so
+/// the loop body stays fully covered without sleeping or a live terminal.
+trait WatchClock {
+    fn wait(&mut self) -> WatchSignal;
+}
+
+/// Renders the live agenda, then redraws it each time the driver signals `Refresh`, returning when
+/// it signals `Quit`. Pure aside from `out` and the injected driver — fully tested.
+fn watch_loop(
+    date: Option<PlanDate>,
+    out: &mut dyn Write,
+    context: &ContextRefs<'_>,
+    clock: &mut dyn WatchClock,
+) -> Result<()> {
+    let date = date.unwrap_or_else(|| today(context));
+    loop {
+        let frame = render_watch_frame(context, &date)?;
+        write!(out, "{WATCH_CLEAR}{frame}")?;
+        out.flush()?;
+        if clock.wait() == WatchSignal::Quit {
+            return Ok(());
+        }
+    }
+}
+
+/// Builds one watch frame: a header (date + wall-clock time + quit hint) above the live agenda
+/// table, reusing `agenda`'s human rendering verbatim so the two views never drift. Pure (tested).
+fn render_watch_frame(context: &ContextRefs<'_>, date: &PlanDate) -> Result<String> {
+    let wall = context.clock.now().strftime("%H:%M:%S");
+    let mut buf: Vec<u8> = Vec::new();
+    writeln!(buf, "ccplan watch · {date} · {wall}")?;
+    writeln!(buf, "(Ctrl-C or Enter to quit)")?;
+    writeln!(buf)?;
+    let args = AgendaArgs {
+        date: Some(date.clone()),
+        json: false,
+    };
+    agenda(args, &mut buf, context)?;
+    Ok(String::from_utf8(buf).expect("agenda renders valid UTF-8"))
+}
+
+/// Drives [`watch_loop`] in production: a background thread reads terminal input while the main
+/// thread waits on a channel with the refresh interval as its timeout. A timeout means "redraw";
+/// any line, EOF, or a closed channel means "quit". This is the genuine timer/thread/stdin IO
+/// boundary — excluded from coverage; the loop logic it feeds lives in the tested `watch_loop`.
+struct RealWatchClock {
+    interval: std::time::Duration,
+    quit: std::sync::mpsc::Receiver<()>,
+}
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+impl RealWatchClock {
+    fn spawn(interval: std::time::Duration) -> Self {
+        let (tx, quit) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut line = String::new();
+            // One read is enough: a line, or EOF, both mean "stop watching".
+            let _ = std::io::stdin().read_line(&mut line);
+            let _ = tx.send(());
+        });
+        Self { interval, quit }
+    }
+}
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+impl WatchClock for RealWatchClock {
+    fn wait(&mut self) -> WatchSignal {
+        use std::sync::mpsc::RecvTimeoutError;
+        match self.quit.recv_timeout(self.interval) {
+            Err(RecvTimeoutError::Timeout) => WatchSignal::Refresh,
+            Ok(()) | Err(RecvTimeoutError::Disconnected) => WatchSignal::Quit,
+        }
+    }
+}
+
+/// Live, auto-refreshing read-only agenda. Wires the real timer/input driver into `watch_loop`.
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn watch(args: WatchArgs, out: &mut dyn Write, context: &ContextRefs<'_>) -> Result<()> {
+    let interval = std::time::Duration::from_secs(u64::from(args.every.as_seconds()));
+    let mut clock = RealWatchClock::spawn(interval);
+    watch_loop(args.date, out, context, &mut clock)
 }
 
 /// Reads the fire ledger — what the scheduler actually did — newest filters applied.
@@ -1551,6 +1648,120 @@ mod read_output_tests {
     fn agenda_entry_row_includes_countdown_column() {
         let header = <super::AgendaEntry as HumanRow>::header();
         assert_eq!(header, &["TIME", "IN", "STATUS", "ID", "TITLE"]);
+    }
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod watch_tests {
+    use super::{WATCH_CLEAR, WatchClock, WatchSignal, render_watch_frame, watch_loop};
+    use crate::{
+        config::Config,
+        context::{Context, RecordingNotifier, RecordingScheduler},
+        model::Plan,
+        store::{HistoryPolicy, Store},
+        time::FixedClock,
+    };
+    use assert_fs::TempDir;
+    use jiff::Zoned;
+
+    /// A scripted refresh driver: replays a fixed signal sequence, then quits. No timer, no input.
+    struct ScriptedClock {
+        signals: std::vec::IntoIter<WatchSignal>,
+    }
+
+    impl WatchClock for ScriptedClock {
+        fn wait(&mut self) -> WatchSignal {
+            self.signals.next().unwrap_or(WatchSignal::Quit)
+        }
+    }
+
+    fn context_at(
+        now: &str,
+    ) -> (
+        TempDir,
+        Context<FixedClock, RecordingScheduler, RecordingNotifier>,
+    ) {
+        let temp = TempDir::new().unwrap();
+        let store = Store::new(temp.path());
+        let clock = FixedClock::new(now.parse::<Zoned>().unwrap());
+        let context = Context::new(
+            store,
+            clock,
+            RecordingScheduler::default(),
+            RecordingNotifier::default(),
+            Config::default(),
+        );
+        let plan = Plan::from_toml(
+            r#"
+date = "2026-06-08"
+timezone = "Asia/Kolkata"
+
+[[block]]
+id = "focus"
+title = "Focus time"
+start = "11:00"
+end = "11:30"
+status = "pending"
+"#,
+        )
+        .unwrap();
+        context
+            .store
+            .set_plan(&plan, HistoryPolicy::Preserve)
+            .unwrap();
+        (temp, context)
+    }
+
+    #[test]
+    fn watch_loop_redraws_each_refresh_and_stops_on_quit() {
+        let (_temp, context) = context_at("2026-06-08T10:50:00+05:30[Asia/Kolkata]");
+        let refs = context.as_refs();
+        let mut out = Vec::new();
+        let mut driver = ScriptedClock {
+            // Refresh draws a second frame; Quit ends the loop after it.
+            signals: vec![WatchSignal::Refresh, WatchSignal::Quit].into_iter(),
+        };
+
+        watch_loop(None, &mut out, &refs, &mut driver).unwrap();
+
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(
+            text.matches("ccplan watch ·").count(),
+            2,
+            "two frames: {text}"
+        );
+        assert!(
+            text.contains(WATCH_CLEAR),
+            "frames clear the screen: {text}"
+        );
+    }
+
+    #[test]
+    fn render_watch_frame_carries_header_clock_and_live_agenda() {
+        let (_temp, context) = context_at("2026-06-08T10:50:00+05:30[Asia/Kolkata]");
+        let refs = context.as_refs();
+
+        let frame = render_watch_frame(&refs, &"2026-06-08".parse().unwrap()).unwrap();
+
+        assert!(
+            frame.starts_with("ccplan watch · 2026-06-08 · 10:50:00"),
+            "{frame}"
+        );
+        assert!(frame.contains("Ctrl-C or Enter to quit"), "{frame}");
+        // The block is active at 11:10, so the live agenda row renders inside the frame.
+        assert!(frame.contains("Focus time"), "{frame}");
+    }
+
+    #[test]
+    fn render_watch_frame_shows_empty_agenda_when_nothing_remains() {
+        // After the only block has ended, the frame still draws but the agenda is empty.
+        let (_temp, context) = context_at("2026-06-08T23:00:00+05:30[Asia/Kolkata]");
+        let refs = context.as_refs();
+
+        let frame = render_watch_frame(&refs, &"2026-06-08".parse().unwrap()).unwrap();
+
+        assert!(frame.contains("nothing left on today's agenda"), "{frame}");
     }
 }
 
