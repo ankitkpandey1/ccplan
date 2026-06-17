@@ -9,6 +9,12 @@ use predicates::prelude::*;
 fn ccplan(temp: &TempDir) -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_ccplan"));
     cmd.env("CCPLAN_ROOT", temp.path());
+    // Force the recording scheduler/notifier (and a fixed clock) so these tests never touch the
+    // host's real systemd timers or D-Bus desktop notifications — `fire`/`apply` against the live
+    // backends would otherwise pop a real "Future focus" toast on the developer's machine every run.
+    // Requires the `test-fakes` feature, which the test suite is built with (CI uses --all-features).
+    cmd.env("CCPLAN_TEST_FAKE_BACKENDS", "1")
+        .env("CCPLAN_TEST_NOW", "2099-01-01T08:00:00+00:00[UTC]");
     cmd
 }
 
