@@ -50,6 +50,8 @@ pub enum Commands {
     Doctor,
     Completions(CompletionsArgs),
     Mcp(McpArgs),
+    #[cfg(feature = "gui")]
+    Gui,
 }
 
 #[derive(Debug, Args)]

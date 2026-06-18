@@ -74,6 +74,8 @@ pub fn dispatch(
             Ok(())
         }
         Some(Commands::Mcp(_args)) => crate::mcp::run_mcp_server(context),
+        #[cfg(feature = "gui")]
+        Some(Commands::Gui) => crate::gui::run_gui(context),
     }
 }
 
@@ -2949,5 +2951,49 @@ status = "pending"
         let now: jiff::Timestamp = "2026-06-08T23:59:45+05:30".parse().unwrap();
         let err = arm_successor(&ctx.as_refs(), &mut Vec::new(), &plan, &sid, now).unwrap_err();
         assert!(err.to_string().contains("past midnight"), "{err}");
+    }
+}
+
+#[cfg(test)]
+#[cfg(feature = "gui")]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod gui_dispatch_tests {
+    use super::dispatch;
+    use crate::{
+        config::Config,
+        context::{Context, RecordingNotifier, RecordingScheduler},
+        store::Store,
+        time::FixedClock,
+    };
+    use assert_fs::TempDir;
+    use jiff::Zoned;
+
+    fn make_ctx(
+        now_str: &str,
+    ) -> (
+        TempDir,
+        Context<FixedClock, RecordingScheduler, RecordingNotifier>,
+    ) {
+        let temp = TempDir::new().unwrap();
+        let context = Context::new(
+            Store::new(temp.path()),
+            FixedClock::new(now_str.parse::<Zoned>().unwrap()),
+            RecordingScheduler::default(),
+            RecordingNotifier::default(),
+            Config::default(),
+        );
+        (temp, context)
+    }
+
+    #[test]
+    fn gui_dispatch_uses_run_gui() {
+        // run_gui has a cfg(test) early-return so this just covers the dispatch arm.
+        let (_temp, ctx) = make_ctx("2026-06-08T10:00:00+05:30[Asia/Kolkata]");
+        dispatch(
+            Some(crate::cli::Commands::Gui),
+            &mut Vec::new(),
+            &ctx.as_refs(),
+        )
+        .unwrap();
     }
 }

@@ -30,6 +30,7 @@ blake3 = "1"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 directories = "6"
+eframe = { version = "0.34", optional = true }
 fs2 = "0.4"
 jiff = { version = "0.2", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
@@ -51,6 +52,7 @@ clap_mangen = "0.3"
 [features]
 default = []
 test-fakes = []
+gui = ["dep:eframe"]
 
 [package.metadata.binstall]
 pkg-url = "https://github.com/ankitkpandey1/ccplan/releases/download/v{ version }/ccplan-{ target }.{ archive-format }"

@@ -37,6 +37,20 @@ pub(crate) fn command() -> Command {
         .subcommand(Command::new("doctor"))
         .subcommand(completions_command())
         .subcommand(Command::new("mcp"))
+        .subcommand(gui_command())
+}
+
+fn gui_command() -> Command {
+    #[cfg(feature = "gui")]
+    {
+        Command::new("gui").about("Open the Cockpit GUI")
+    }
+    #[cfg(not(feature = "gui"))]
+    {
+        Command::new("gui")
+            .about("Open the Cockpit GUI (build with --features gui to enable)")
+            .hide(true)
+    }
 }
 
 fn set_command() -> Command {

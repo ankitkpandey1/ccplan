@@ -336,6 +336,13 @@ cargo build --release
 ./target/release/ccplan --help
 ```
 
+The Cockpit GUI is an optional compile-time feature (disabled by default to keep the binary lean and avoid a native-window dependency):
+
+```sh
+cargo build --release --features gui
+./target/release/ccplan gui      # opens the Cockpit window
+```
+
 Design notes and invariants live in [`DESIGN.md`](DESIGN.md).
 
 ---

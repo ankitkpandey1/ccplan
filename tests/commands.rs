@@ -21,6 +21,19 @@ use jiff::{SignedDuration, Timestamp, Zoned};
 use serde_json::Value;
 
 #[test]
+#[cfg(feature = "gui")]
+fn gui_subcommand_headless_succeeds() {
+    // CCPLAN_HEADLESS makes run_gui() return Ok(()) without opening a window.
+    // This covers the Gui dispatch arm in the integration-test binary so the
+    // llvm-cov --fail-under-lines 100 gate passes across all compiled binaries.
+    // SAFETY: single-threaded test process; no other thread reads this var.
+    unsafe { std::env::set_var("CCPLAN_HEADLESS", "1") };
+    let (_temp, context) = test_context_at("2026-06-08T10:00:00+05:30[Asia/Kolkata]");
+    run_ok(&context, ["ccplan", "gui"]);
+    unsafe { std::env::remove_var("CCPLAN_HEADLESS") };
+}
+
+#[test]
 fn no_command_is_a_successful_noop() {
     let (_temp, context) = test_context_at("2026-06-08T10:00:00+05:30[Asia/Kolkata]");
 
