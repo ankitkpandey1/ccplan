@@ -2,10 +2,13 @@ use assert_fs::TempDir;
 use ccplan::{
     lifecycle::Event,
     model::{
-        Block, BlockId, ClockTime, DurationSpec, Lead, Plan, PlanDate, Run, Span, Status,
-        TimeZoneName,
+        Block, BlockId, ClockTime, DurationSpec, Lead, Origin, Plan, PlanDate, RecurRule,
+        Recurrence, RecurringRules, Run, Span, Status, TimeZoneName,
     },
-    store::{FiredEventKey, FiredStatus, HistoryPolicy, Store, StoreError, TriggerRecord},
+    store::{
+        FireRecord, FiredEventKey, FiredStatus, HistoryPolicy, Store, StoreError, TriggerKind,
+        TriggerRecord, compute_gen_hash,
+    },
 };
 use jiff::Timestamp;
 
@@ -505,6 +508,17 @@ fn block(id: &str, status: Status) -> Block {
         tags: Vec::new(),
         status,
         run: Some(Run::new(vec!["/bin/echo".to_owned()]).unwrap()),
+        recurrence: None,
+        origin: None,
+        after: vec![],
+        on_success: vec![],
+        on_failure: vec![],
+        on_missed: vec![],
+        retry: None,
+        expect_by: None,
+        approval: Some(ccplan::model::Approval::Pending),
+        when: None,
+        agent: None,
     }
 }
 
@@ -523,6 +537,8 @@ fn fired_key(id: &str) -> FiredEventKey {
         event: Event::Start,
         rev: block.schedule_rev(),
         scheduled_at: timestamp(),
+        attempt: 0,
+        agent: None,
     }
 }
 
@@ -535,6 +551,8 @@ fn trigger(backend_id: &str, id: &str) -> TriggerRecord {
         event: key.event,
         rev: key.rev,
         scheduled_at: key.scheduled_at,
+        kind: TriggerKind::Fire,
+        attempt: 0,
     }
 }
 
@@ -544,4 +562,381 @@ fn date() -> PlanDate {
 
 fn timestamp() -> Timestamp {
     "2026-06-08T13:00:00Z".parse().unwrap()
+}
+
+// ── M3: recurring rules, materialize, gen_hash, dead-man ────────────────────
+
+fn recurring_block(id: &str) -> Block {
+    Block {
+        id: BlockId::new(id).unwrap(),
+        title: format!("Recurring {id}"),
+        start: "09:00".parse::<ClockTime>().unwrap(),
+        span: Span::Duration(DurationSpec::from_seconds(30 * 60).unwrap()),
+        notify: Lead::from_seconds(0).unwrap(),
+        tags: Vec::new(),
+        status: Status::Pending,
+        run: None,
+        recurrence: Some(Recurrence {
+            rule: RecurRule::Daily,
+            anchor: "2026-06-08".parse().unwrap(),
+            end: None,
+        }),
+        origin: None,
+        after: vec![],
+        on_success: vec![],
+        on_failure: vec![],
+        on_missed: vec![],
+        retry: None,
+        expect_by: None,
+        approval: None,
+        when: None,
+        agent: None,
+    }
+}
+
+#[test]
+fn load_recurring_rules_returns_empty_when_file_missing() {
+    let temp = TempDir::new().unwrap();
+    let store = Store::new(temp.path());
+    let rules = store
+        .load_recurring_rules()
+        .expect("should succeed with missing file");
+    assert!(rules.blocks.is_empty());
+}
+
+#[test]
+fn save_and_load_recurring_rules_round_trips() {
+    let temp = TempDir::new().unwrap();
+    let store = Store::new(temp.path());
+    let mut rules = RecurringRules::default();
+    rules.blocks.push(recurring_block("standup"));
+
+    store.save_recurring_rules(&rules).expect("should save");
+    let loaded = store.load_recurring_rules().expect("should load");
+    assert_eq!(loaded.blocks.len(), 1);
+    assert_eq!(loaded.blocks[0].id.as_str(), "standup");
+}
+
+#[test]
+fn compute_gen_hash_is_deterministic() {
+    let b = recurring_block("focus");
+    assert_eq!(compute_gen_hash(&b), compute_gen_hash(&b));
+}
+
+#[test]
+fn compute_gen_hash_changes_when_start_changes() {
+    let b1 = recurring_block("focus");
+    let mut b2 = b1.clone();
+    b2.start = "10:00".parse().unwrap();
+    assert_ne!(compute_gen_hash(&b1), compute_gen_hash(&b2));
+}
+
+#[test]
+fn materialize_for_date_generates_occurrence_for_matching_rule() {
+    let temp = TempDir::new().unwrap();
+    let store = Store::new(temp.path());
+    let mut rules = RecurringRules::default();
+    rules.blocks.push(recurring_block("standup"));
+    store.save_recurring_rules(&rules).unwrap();
+
+    let plan = store
+        .materialize_for_date(&date(), Lead::from_seconds(0).unwrap())
+        .expect("materialize should succeed");
+
+    assert_eq!(plan.blocks.len(), 1);
+    assert_eq!(plan.blocks[0].id.as_str(), "standup");
+    assert!(plan.blocks[0].origin.is_some());
+    assert!(plan.blocks[0].recurrence.is_none()); // occurrences are concrete
+}
+
+#[test]
+fn materialize_skips_rules_that_do_not_match_date() {
+    let temp = TempDir::new().unwrap();
+    let store = Store::new(temp.path());
+
+    // weekly:tue — date() is 2026-06-08 which is a Monday.
+    let mut rule = recurring_block("tuesday-sync");
+    rule.recurrence = Some(Recurrence {
+        rule: RecurRule::Weekly(vec![ccplan::model::Weekday::Tuesday]),
+        anchor: "2026-06-08".parse().unwrap(),
+        end: None,
+    });
+    let mut rules = RecurringRules::default();
+    rules.blocks.push(rule);
+    store.save_recurring_rules(&rules).unwrap();
+
+    let plan = store
+        .materialize_for_date(&date(), Lead::from_seconds(0).unwrap())
+        .expect("materialize should succeed");
+
+    assert!(plan.blocks.is_empty());
+}
+
+#[test]
+fn materialize_preserves_user_modified_generated_block() {
+    let temp = TempDir::new().unwrap();
+    let store = Store::new(temp.path());
+    let rule = recurring_block("standup");
+    let mut rules = RecurringRules::default();
+    rules.blocks.push(rule.clone());
+    store.save_recurring_rules(&rules).unwrap();
+
+    // Materialize once so the generated block exists.
+    let plan = store
+        .materialize_for_date(&date(), Lead::from_seconds(0).unwrap())
+        .unwrap();
+    store.set_plan(&plan, HistoryPolicy::Override).unwrap();
+
+    // Now "user edits" by setting a wrong gen_hash on the stored block.
+    let mut mutated = plan.clone();
+    mutated.blocks[0].origin = Some(Origin {
+        rule_id: BlockId::new("standup").unwrap(),
+        gen_hash: "user-modified-hash".to_owned(),
+    });
+    store.set_plan(&mutated, HistoryPolicy::Override).unwrap();
+
+    // Re-materialize: user-modified block should survive, not be replaced.
+    let re_plan = store
+        .materialize_for_date(&date(), Lead::from_seconds(0).unwrap())
+        .unwrap();
+    let kept = re_plan
+        .blocks
+        .iter()
+        .find(|b| b.id.as_str() == "standup")
+        .expect("user-modified block should be kept");
+    assert_eq!(kept.origin.as_ref().unwrap().gen_hash, "user-modified-hash");
+}
+
+#[test]
+fn materialize_returns_collision_error_for_hand_authored_id_matching_rule() {
+    let temp = TempDir::new().unwrap();
+    let store = Store::new(temp.path());
+
+    // Save a recurring rule with id "standup".
+    let mut rules = RecurringRules::default();
+    rules.blocks.push(recurring_block("standup"));
+    store.save_recurring_rules(&rules).unwrap();
+
+    // Save a hand-authored plan (no origin) with id "standup".
+    let hand_block = Block {
+        id: BlockId::new("standup").unwrap(),
+        title: "Hand standup".to_owned(),
+        start: "10:00".parse::<ClockTime>().unwrap(),
+        span: Span::Duration(DurationSpec::from_seconds(30 * 60).unwrap()),
+        notify: Lead::from_seconds(0).unwrap(),
+        tags: vec![],
+        status: Status::Pending,
+        run: None,
+        recurrence: None,
+        origin: None,
+        after: vec![],
+        on_success: vec![],
+        on_failure: vec![],
+        on_missed: vec![],
+        retry: None,
+        expect_by: None,
+        approval: None,
+        when: None,
+        agent: None,
+    };
+    let hand_plan = Plan {
+        date: date(),
+        timezone: "UTC".parse().unwrap(),
+        blocks: vec![hand_block],
+    };
+    store.set_plan(&hand_plan, HistoryPolicy::Override).unwrap();
+
+    let err = store
+        .materialize_for_date(&date(), Lead::from_seconds(0).unwrap())
+        .expect_err("collision should be an error");
+    assert!(matches!(err, StoreError::RecurrenceCollision { .. }));
+    assert_eq!(err.exit_code(), 6);
+}
+
+#[test]
+fn load_recurring_rules_returns_error_on_non_notfound_io() {
+    // Creating a directory at the recurring.toml path causes IsADirectory error (not NotFound),
+    // which exercises the Err(source) arm at store.rs line 108.
+    let temp = TempDir::new().unwrap();
+    let store = Store::new(temp.path());
+    let path = store.recurring_path();
+    std::fs::create_dir_all(&path).unwrap(); // path is now a directory, not a file
+    let err = store
+        .load_recurring_rules()
+        .expect_err("directory-as-file should return IO error");
+    assert!(matches!(err, StoreError::Io { .. }));
+}
+
+#[test]
+fn materialize_for_date_regenerates_untouched_generated_block() {
+    // The second materialize_for_date finds an existing block with matching gen_hash
+    // and skips it (line 191 continue), then regenerates it from rules.
+    let temp = TempDir::new().unwrap();
+    let store = Store::new(temp.path());
+    let rule = recurring_block("standup");
+    let mut rules = RecurringRules::default();
+    rules.blocks.push(rule.clone());
+    store.save_recurring_rules(&rules).unwrap();
+
+    // First pass: generate block and save to store.
+    let plan1 = store
+        .materialize_for_date(&date(), Lead::from_seconds(0).unwrap())
+        .unwrap();
+    store.set_plan(&plan1, HistoryPolicy::Override).unwrap();
+    // plan1.blocks[0].origin.gen_hash == compute_gen_hash(&rule)
+
+    // Second pass: existing block has matching gen_hash → skipped (line 191), regenerated.
+    let plan2 = store
+        .materialize_for_date(&date(), Lead::from_seconds(0).unwrap())
+        .unwrap();
+    assert_eq!(plan2.blocks.len(), 1);
+    assert_eq!(plan2.blocks[0].id.as_str(), "standup");
+    assert_eq!(
+        plan2.blocks[0].origin.as_ref().unwrap().gen_hash,
+        compute_gen_hash(&rule)
+    );
+}
+
+#[test]
+fn materialize_for_date_keeps_ordinary_hand_authored_block() {
+    // An existing plan with a plain block (no origin, id not matching any rule) goes through
+    // the else branch at store.rs lines 200-203 (always keep).
+    let temp = TempDir::new().unwrap();
+    let store = Store::new(temp.path());
+
+    // Save a plan with an ordinary block (no recurring rules).
+    let p = plan_with(vec![block("meeting", Status::Pending)]);
+    store.set_plan(&p, HistoryPolicy::Preserve).unwrap();
+
+    // Materialize with no rules: the ordinary block should be kept.
+    let result = store
+        .materialize_for_date(&date(), Lead::from_seconds(0).unwrap())
+        .unwrap();
+    assert_eq!(result.blocks.len(), 1);
+    assert_eq!(result.blocks[0].id.as_str(), "meeting");
+    assert!(result.blocks[0].origin.is_none());
+}
+
+#[test]
+fn dead_man_check_skips_other_block_records_and_non_success_outcomes() {
+    // Fire log contains a record for a different block (hits line 242 continue) and a record
+    // for the target block with a non-success outcome (hits line 247, the } of the inner if).
+    let temp = TempDir::new().unwrap();
+    let store = Store::new(temp.path());
+    let block_id = BlockId::new("standup").unwrap();
+    let other_id = BlockId::new("focus").unwrap();
+    let fired_at: Timestamp = "2026-06-08T09:00:00Z".parse().unwrap();
+    let now: Timestamp = "2026-06-08T14:00:00Z".parse().unwrap();
+
+    std::fs::create_dir_all(store.fire_log_path().parent().unwrap()).unwrap();
+    let records = [
+        FireRecord {
+            ts: fired_at,
+            date: date(),
+            id: other_id.clone(),
+            event: ccplan::lifecycle::Event::Start,
+            outcome: "notify".to_owned(),
+            detail: String::new(),
+            agent: None,
+        },
+        // This record's id matches but outcome is not "notify"/"run-ok" → line 247 } hit.
+        FireRecord {
+            ts: fired_at,
+            date: date(),
+            id: block_id.clone(),
+            event: ccplan::lifecycle::Event::Start,
+            outcome: "activate".to_owned(),
+            detail: String::new(),
+            agent: None,
+        },
+    ];
+    let content: String = records
+        .iter()
+        .map(|r| serde_json::to_string(r).unwrap() + "\n")
+        .collect();
+    std::fs::write(store.fire_log_path(), content).unwrap();
+
+    // No success record for "standup" → dead man tripped.
+    let result = store.dead_man_check(&block_id, 3600, &now).unwrap();
+    assert!(result, "no success record → dead man should trip");
+}
+
+#[test]
+fn compute_gen_hash_uses_end_span_variant() {
+    // Exercises the Span::End arm in compute_gen_hash (lines 804-807).
+    let mut b = recurring_block("standup");
+    b.span = Span::End("10:00".parse::<ClockTime>().unwrap());
+    let h1 = compute_gen_hash(&b);
+    let h2 = compute_gen_hash(&b);
+    assert_eq!(h1, h2, "gen_hash must be deterministic for Span::End");
+    // Differs from the Duration variant.
+    let b_dur = recurring_block("standup");
+    assert_ne!(
+        h1,
+        compute_gen_hash(&b_dur),
+        "End and Duration hashes must differ"
+    );
+}
+
+#[test]
+fn dead_man_check_returns_true_when_no_fire_record_exists() {
+    let temp = TempDir::new().unwrap();
+    let store = Store::new(temp.path());
+    let now: Timestamp = "2026-06-08T14:00:00Z".parse().unwrap();
+    let id = BlockId::new("standup").unwrap();
+    let result = store.dead_man_check(&id, 3600, &now).unwrap();
+    assert!(result, "no records → dead man should trip");
+}
+
+#[test]
+fn dead_man_check_returns_false_when_recent_success() {
+    let temp = TempDir::new().unwrap();
+    let store = Store::new(temp.path());
+    let block_id = BlockId::new("standup").unwrap();
+    let fired_at: Timestamp = "2026-06-08T09:00:00Z".parse().unwrap();
+    let now: Timestamp = "2026-06-08T09:30:00Z".parse().unwrap(); // 30 min later
+
+    // Write a fire record with notify outcome (success).
+    std::fs::create_dir_all(store.fire_log_path().parent().unwrap()).unwrap();
+    let record = FireRecord {
+        ts: fired_at,
+        date: date(),
+        id: block_id.clone(),
+        event: ccplan::lifecycle::Event::Start,
+        outcome: "notify".to_owned(),
+        detail: String::new(),
+        agent: None,
+    };
+    let line = serde_json::to_string(&record).unwrap() + "\n";
+    std::fs::write(store.fire_log_path(), line).unwrap();
+
+    // expect_by = 3600s (1h), elapsed = 30m → NOT tripped.
+    let result = store.dead_man_check(&block_id, 3600, &now).unwrap();
+    assert!(!result, "recent success should not trip dead man");
+}
+
+#[test]
+fn dead_man_check_returns_true_when_success_is_too_old() {
+    let temp = TempDir::new().unwrap();
+    let store = Store::new(temp.path());
+    let block_id = BlockId::new("standup").unwrap();
+    let fired_at: Timestamp = "2026-06-08T07:00:00Z".parse().unwrap();
+    let now: Timestamp = "2026-06-08T10:00:00Z".parse().unwrap(); // 3h later
+
+    std::fs::create_dir_all(store.fire_log_path().parent().unwrap()).unwrap();
+    let record = FireRecord {
+        ts: fired_at,
+        date: date(),
+        id: block_id.clone(),
+        event: ccplan::lifecycle::Event::Start,
+        outcome: "notify".to_owned(),
+        detail: String::new(),
+        agent: None,
+    };
+    let line = serde_json::to_string(&record).unwrap() + "\n";
+    std::fs::write(store.fire_log_path(), line).unwrap();
+
+    // expect_by = 3600s (1h), elapsed = 3h → tripped.
+    let result = store.dead_man_check(&block_id, 3600, &now).unwrap();
+    assert!(result, "stale success should trip dead man");
 }

@@ -1,5 +1,6 @@
 use ccplan::model::{
-    Block, BlockId, ClockTime, DurationSpec, Lead, Plan, PlanDate, Run, Span, Status, TimeZoneName,
+    Approval, Block, BlockId, ClockTime, DurationSpec, Lead, Plan, PlanDate, Run, Span, Status,
+    TimeZoneName,
 };
 use proptest::prelude::*;
 
@@ -60,6 +61,9 @@ fn block_strategy() -> impl Strategy<Value = Block> {
     )
         .prop_map(
             |(id, title, start_minute, duration_minutes, notify_seconds, tags, status, run)| {
+                // Blocks with run: Some get approval auto-set to Pending on parse.
+                // Pre-set it so the TOML round-trip stays equal.
+                let approval = run.as_ref().map(|_| Approval::Pending);
                 Block {
                     id: BlockId::new(id).unwrap(),
                     title,
@@ -71,6 +75,17 @@ fn block_strategy() -> impl Strategy<Value = Block> {
                     tags,
                     status,
                     run: run.map(|argv| Run::new(argv).unwrap()),
+                    recurrence: None,
+                    origin: None,
+                    after: vec![],
+                    on_success: vec![],
+                    on_failure: vec![],
+                    on_missed: vec![],
+                    retry: None,
+                    expect_by: None,
+                    approval,
+                    when: None,
+                    agent: None,
                 }
             },
         )

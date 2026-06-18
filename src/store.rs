@@ -15,7 +15,8 @@ use thiserror::Error;
 
 use crate::{
     lifecycle::Event,
-    model::{BlockId, Lead, Plan, PlanDate, PlanError, ScheduleRev},
+    model::{Block, BlockId, Lead, Plan, PlanDate, PlanError, RecurringRules, ScheduleRev},
+    recurrence::expand,
 };
 
 #[derive(Debug, Clone)]
@@ -91,6 +92,162 @@ impl Store {
             records.push(map_json_result(serde_json::from_str(line), &path)?);
         }
         Ok(records)
+    }
+
+    /// Loads recurring rules from `data/recurring.toml`, or returns an empty set if the file does
+    /// not exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError`] if the file exists but cannot be read or parsed.
+    pub fn load_recurring_rules(&self) -> Result<RecurringRules, StoreError> {
+        let path = self.recurring_path();
+        match fs::read_to_string(&path) {
+            Ok(input) => Ok(RecurringRules::from_toml(&input)?),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(RecurringRules::default()),
+            Err(source) => Err(io_error(path, source)),
+        }
+    }
+
+    /// Atomically writes `rules` to `data/recurring.toml`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError`] if serialization or the filesystem write fails.
+    pub fn save_recurring_rules(&self, rules: &RecurringRules) -> Result<(), StoreError> {
+        let toml = rules.to_toml()?;
+        atomic_write(&self.recurring_path(), toml.as_bytes())
+    }
+
+    /// Expands recurring rules for `date` and provenance-merges the results into the plan file.
+    ///
+    /// The three-state provenance logic:
+    /// - hand-authored (`origin = None`, same id as a rule) → `RecurrenceCollision` error
+    /// - user-modified (hash mismatch) → left untouched forever
+    /// - untouched-generated (hash matches) → regenerated / retired when the rule no longer applies
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError`] if reading/writing fails or a hand-authored id collides with a rule id.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `"UTC"` is somehow not a valid timezone name (impossible in practice).
+    pub fn materialize_for_date(
+        &self,
+        date: &PlanDate,
+        default_lead: Lead,
+    ) -> Result<Plan, StoreError> {
+        let rules = self.load_recurring_rules()?;
+        let existing = self.load_plan_unlocked_with_default(date, default_lead)?;
+
+        let tz = rules
+            .timezone
+            .clone()
+            .or_else(|| existing.as_ref().map(|p| p.timezone.clone()))
+            .unwrap_or_else(|| "UTC".parse().expect("UTC is always valid"));
+
+        // Build generated blocks for this date from the recurring rules.
+        let mut generated: Vec<Block> = rules
+            .blocks
+            .iter()
+            .filter(|rule| {
+                rule.recurrence
+                    .as_ref()
+                    .is_some_and(|rec| expand(&rec.rule, &rec.anchor, rec.end.as_ref(), date))
+            })
+            .map(|rule| {
+                let mut block = rule.clone();
+                block.recurrence = None; // occurrences are concrete
+                block.origin = Some(crate::model::Origin {
+                    rule_id: rule.id.clone(),
+                    gen_hash: compute_gen_hash(rule),
+                });
+                block
+            })
+            .collect();
+
+        // Merge with existing: preserve terminal + user-modified blocks.
+        let existing_blocks = existing
+            .as_ref()
+            .map(|p| p.blocks.clone())
+            .unwrap_or_default();
+
+        let rule_ids: std::collections::HashSet<&BlockId> =
+            rules.blocks.iter().map(|r| &r.id).collect();
+
+        let mut final_blocks: Vec<Block> = Vec::new();
+
+        for existing_block in &existing_blocks {
+            if let Some(origin) = &existing_block.origin {
+                // Generated block: check if it's user-modified.
+                let current_hash = rules
+                    .blocks
+                    .iter()
+                    .find(|r| r.id == origin.rule_id)
+                    .map(compute_gen_hash);
+                if current_hash.as_deref() == Some(&origin.gen_hash) {
+                    // Untouched — skip; will be regenerated from rules.
+                    continue;
+                }
+                // User-modified — keep forever.
+                final_blocks.push(existing_block.clone());
+            } else if rule_ids.contains(&existing_block.id) {
+                // Hand-authored id collides with a rule id → hard error.
+                return Err(StoreError::RecurrenceCollision {
+                    id: existing_block.id.clone(),
+                });
+            } else {
+                // Ordinary hand-authored block — always keep.
+                final_blocks.push(existing_block.clone());
+            }
+        }
+
+        // Append new generated blocks (only those not already represented as user-modified).
+        let modified_ids: std::collections::HashSet<BlockId> =
+            final_blocks.iter().map(|b| b.id.clone()).collect();
+        for gen_block in generated.drain(..) {
+            if !modified_ids.contains(&gen_block.id) {
+                final_blocks.push(gen_block);
+            }
+        }
+
+        let plan = Plan {
+            date: date.clone(),
+            timezone: tz,
+            blocks: final_blocks,
+        };
+        plan.validate().map_err(PlanError::from)?;
+        Ok(plan)
+    }
+
+    /// Returns `true` if the block with the given id has not succeeded within `expect_by` of
+    /// `scheduled_at`, according to the fire ledger.
+    ///
+    /// Returns `false` when `expect_by` is `None` or the ledger shows a success within the window.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError`] if the fire ledger cannot be read.
+    pub fn dead_man_check(
+        &self,
+        block_id: &BlockId,
+        expect_by_secs: u64,
+        now: &Timestamp,
+    ) -> Result<bool, StoreError> {
+        let log = self.read_fire_log()?;
+        let window_secs = expect_by_secs.cast_signed();
+        for record in log.iter().rev() {
+            if &record.id != block_id {
+                continue;
+            }
+            if record.outcome == "notify" || record.outcome == "run-ok" {
+                let age = now.duration_since(record.ts);
+                return Ok(age.as_secs() > window_secs);
+            }
+        }
+        // No success found at all → dead-man tripped.
+        Ok(true)
     }
 
     /// Filesystem path of a named day template (a stored plan TOML). The caller must validate `name`
@@ -462,6 +619,11 @@ impl Store {
     pub fn config_path(&self) -> PathBuf {
         self.config.join("config.toml")
     }
+
+    #[must_use]
+    pub fn recurring_path(&self) -> PathBuf {
+        self.data.join("recurring.toml")
+    }
 }
 
 #[derive(Debug)]
@@ -519,12 +681,25 @@ pub struct FiredEventKey {
     pub event: Event,
     pub rev: ScheduleRev,
     pub scheduled_at: Timestamp,
+    #[serde(default)]
+    pub attempt: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FiredStatus {
     Recorded,
     AlreadyFired,
+}
+
+/// Whether a trigger fires `ccplan fire` (a block event) or `ccplan roll` (horizon refresh).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TriggerKind {
+    #[default]
+    Fire,
+    Roll,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -536,6 +711,10 @@ pub struct TriggerRecord {
     pub event: Event,
     pub rev: ScheduleRev,
     pub scheduled_at: Timestamp,
+    #[serde(default)]
+    pub kind: TriggerKind,
+    #[serde(default)]
+    pub attempt: u32,
 }
 
 /// One entry in the append-only fire ledger: what the scheduler did when a block's event fired.
@@ -554,6 +733,8 @@ pub struct FireRecord {
     pub event: Event,
     pub outcome: String,
     pub detail: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -592,6 +773,8 @@ pub enum StoreError {
     },
     #[error("terminal block `{id}` would be altered without override")]
     TerminalHistory { id: BlockId },
+    #[error("hand-authored block `{id}` collides with a recurring rule id")]
+    RecurrenceCollision { id: BlockId },
 }
 
 impl StoreError {
@@ -599,10 +782,47 @@ impl StoreError {
     pub const fn exit_code(&self) -> i32 {
         match self {
             Self::Plan(error) => error.exit_code(),
-            Self::TerminalHistory { .. } => 6,
+            Self::TerminalHistory { .. } | Self::RecurrenceCollision { .. } => 6,
             Self::ProjectDirsUnavailable | Self::Locked | Self::Io { .. } | Self::Json { .. } => 1,
         }
     }
+}
+
+/// Hashes the rule-generated scheduling fields of a block so we can detect user edits.
+///
+/// Only the fields the materializer sets are included: `id`, `title`, `start`, `end`/`duration`,
+/// `notify`, and the `every`/`anchor` recurrence descriptor. Status, tags, and run are excluded
+/// because users routinely update them without losing their provenance.
+#[must_use]
+pub fn compute_gen_hash(block: &Block) -> String {
+    use crate::model::Span;
+    let mut h = blake3::Hasher::new();
+    h.update(b"ccplan-gen-hash-v1\0");
+    h.update(block.id.as_str().as_bytes());
+    h.update(b"\0");
+    h.update(block.title.as_bytes());
+    h.update(b"\0");
+    h.update(block.start.to_string().as_bytes());
+    h.update(b"\0");
+    match &block.span {
+        Span::End(t) => {
+            h.update(b"end\0");
+            h.update(t.to_string().as_bytes());
+        }
+        Span::Duration(d) => {
+            h.update(b"dur\0");
+            h.update(d.to_string().as_bytes());
+        }
+    }
+    h.update(b"\0");
+    h.update(block.notify.to_string().as_bytes());
+    h.update(b"\0");
+    if let Some(rec) = &block.recurrence {
+        h.update(rec.rule.to_string().as_bytes());
+        h.update(b"\0");
+        h.update(rec.anchor.to_string().as_bytes());
+    }
+    format!("{}", h.finalize())
 }
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), StoreError> {

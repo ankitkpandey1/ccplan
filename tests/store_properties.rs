@@ -34,6 +34,17 @@ fn fired_key(id: &str) -> FiredEventKey {
         tags: Vec::new(),
         status: Status::Pending,
         run: None,
+        recurrence: None,
+        origin: None,
+        after: vec![],
+        on_success: vec![],
+        on_failure: vec![],
+        on_missed: vec![],
+        retry: None,
+        expect_by: None,
+        approval: None,
+        when: None,
+        agent: None,
     };
 
     FiredEventKey {
@@ -42,5 +53,7 @@ fn fired_key(id: &str) -> FiredEventKey {
         event: Event::Start,
         rev: block.schedule_rev(),
         scheduled_at: "2026-06-08T13:00:00Z".parse::<Timestamp>().unwrap(),
+        attempt: 0,
+        agent: None,
     }
 }

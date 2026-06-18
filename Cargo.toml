@@ -22,6 +22,10 @@ path = "src/bin/ccplan-fire.rs"
 
 [workspace]
 members = ["."]
+# The Cockpit desktop app (Tauri) is its own workspace: it needs WebKit/GTK system
+# deps and is a GUI IO boundary, so it stays out of ccplan's strict --workspace test
+# and 100%-line-coverage gate. Build it from cockpit/src-tauri (see cockpit/README.md).
+exclude = ["cockpit/src-tauri"]
 resolver = "3"
 
 [dependencies]

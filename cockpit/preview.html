@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>ccplan preview</title>
+    <link rel="stylesheet" href="dist/styles.css" />
+    <script>
+      // Mock the Tauri bridge with a realistic day so the UI can be previewed in a browser.
+      const card = (o) =>
+        Object.assign(
+          {
+            id: o.title.toLowerCase().replace(/\W+/g, "-"),
+            time_range: "00:00–00:00",
+            countdown: "",
+            status: "pending",
+            has_recurrence: false,
+            has_run: false,
+            awaiting_approval: false,
+            has_agent: false,
+            has_expect_by_breach: false,
+            tags: [],
+          },
+          o
+        );
+      const SNAP = {
+        date: "2026-06-18",
+        is_today: true,
+        pending_approvals: 1,
+        today: {
+          date_label: "2026-06-18",
+          now_label: "10:24",
+          now_line_index: 3,
+          cards: [
+            card({ title: "Morning standup", time_range: "09:00–09:15", countdown: "done", status: "done", has_recurrence: true }),
+            card({ title: "Inbox & triage", time_range: "09:15–09:45", countdown: "done", status: "done" }),
+            card({ title: "Deep work — Cockpit", time_range: "09:45–11:30", countdown: "now", status: "active", tags: ["focus"] }),
+            card({ title: "Lunch", time_range: "12:00–13:00", countdown: "in 1h36m" }),
+            card({ title: "Backup job", time_range: "14:00–14:05", countdown: "in 3h36m", has_run: true, awaiting_approval: true, has_agent: true }),
+            card({ title: "1:1 with Sam", time_range: "15:30–16:00", countdown: "in 5h06m", tags: ["meeting"] }),
+            card({ title: "Review PRs", time_range: "16:00–17:00", countdown: "in 5h36m", has_expect_by_breach: false }),
+          ],
+        },
+        up_next: {
+          items: [
+            card({ title: "Lunch", time_range: "12:00–13:00", countdown: "in 1h36m" }),
+            card({ title: "Backup job", time_range: "14:00–14:05", countdown: "in 3h36m" }),
+            card({ title: "1:1 with Sam", time_range: "15:30–16:00", countdown: "in 5h06m" }),
+          ],
+        },
+        approvals: {
+          items: [
+            {
+              id: "backup-job",
+              title: "Backup job",
+              when: "14:00",
+              argv: "/usr/local/bin/restic backup ~/Documents --tag daily",
+              reason: "Scheduled by: agent-ops",
+            },
+          ],
+        },
+        automations: {
+          rules: [
+            { id: "standup", title: "Morning standup", schedule: "weekday", end_label: "09:15", has_run: false, has_agent: false },
+            { id: "backup", title: "Backup job", schedule: "daily", end_label: null, has_run: true, has_agent: true },
+            { id: "review", title: "Weekly review", schedule: "weekly:fri", end_label: "17:00", has_run: false, has_agent: false },
+          ],
+        },
+        activity: {
+          items: [
+            { icon: "✓", ts_label: "10:00", text: "Inbox & triage — notified", kind: "Ok" },
+            { icon: "▶", ts_label: "09:45", text: "Deep work — activated", kind: "Run" },
+            { icon: "✓", ts_label: "09:15", text: "Morning standup — closed", kind: "Ok" },
+            { icon: "⚠", ts_label: "08:30", text: "agent-ops missed heartbeat", kind: "Error" },
+          ],
+        },
+        agents: {
+          agents: [
+            { name: "agent-ops", last_action: "fired backup job · 1h ago", is_ok: true },
+            { name: "agent-research", last_action: "no heartbeat in 26h", is_ok: false },
+          ],
+        },
+        upcoming: {
+          days: [
+            { date_label: "2026-06-19", cards: [card({ title: "Sprint planning", time_range: "10:00–11:00", countdown: "tomorrow" }), card({ title: "Gym", time_range: "18:00–19:00", countdown: "tomorrow", tags: ["health"] })] },
+            { date_label: "2026-06-20", cards: [card({ title: "Weekly review", time_range: "16:00–17:00", countdown: "in 2d", has_recurrence: true })] },
+          ],
+        },
+      };
+      window.__TAURI__ = {
+        core: { invoke: async (cmd) => SNAP },
+      };
+    </script>
+  </head>
+  <body>
+    <div class="titlebar"></div>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand"><span class="brand-mark">◴</span><span class="brand-name">ccplan</span></div>
+        <nav class="nav" id="nav">
+          <button class="nav-item active" data-view="today"><span class="nav-ico">◎</span><span class="nav-label">Today</span></button>
+          <button class="nav-item" data-view="upcoming"><span class="nav-ico">▦</span><span class="nav-label">Upcoming</span></button>
+          <button class="nav-item" data-view="automations"><span class="nav-ico">↻</span><span class="nav-label">Automations</span></button>
+          <button class="nav-item" data-view="approvals"><span class="nav-ico">⎙</span><span class="nav-label">Approvals</span><span class="nav-badge" id="approvalsBadge" hidden></span></button>
+          <button class="nav-item" data-view="activity"><span class="nav-ico">≣</span><span class="nav-label">Activity</span></button>
+          <button class="nav-item" data-view="agents"><span class="nav-ico">⚡</span><span class="nav-label">Agents</span></button>
+        </nav>
+        <div class="sidebar-foot"><button class="ghost-btn" id="refreshBtn">↻ Refresh</button></div>
+      </aside>
+      <main class="main">
+        <header class="topbar">
+          <div class="topbar-left">
+            <button class="chev" id="prevDay">‹</button>
+            <div class="topbar-title"><h1 id="viewTitle">Today</h1><p id="viewSub" class="sub"></p></div>
+            <button class="chev" id="nextDay">›</button>
+            <button class="today-btn" id="todayBtn" hidden>Today</button>
+          </div>
+          <div class="topbar-right"><button class="primary-btn" id="newBlockBtn">＋ New block</button></div>
+        </header>
+        <section class="content" id="content"></section>
+      </main>
+      <aside class="rail">
+        <div class="rail-head">Up next</div>
+        <div id="rail" class="rail-body"></div>
+      </aside>
+    </div>
+    <div class="sheet-backdrop" id="sheetBackdrop" hidden>
+      <form class="sheet" id="blockForm">
+        <h2 id="sheetTitle">New block</h2>
+        <label class="field"><span>Title</span><input id="f_title" type="text" required /></label>
+        <div class="field-row">
+          <label class="field"><span>Start</span><input id="f_start" type="time" required /></label>
+          <label class="field"><span>Duration</span><select id="f_duration"><option value="30m">30 min</option></select></label>
+        </div>
+        <label class="field"><span>Tags <em>optional</em></span><input id="f_tags" type="text" /></label>
+        <p class="sheet-error" id="sheetError" hidden></p>
+        <div class="sheet-actions"><button type="button" class="ghost-btn" id="sheetCancel">Cancel</button><button type="submit" class="primary-btn" id="sheetSave">Add block</button></div>
+      </form>
+    </div>
+    <div class="toast" id="toast" hidden></div>
+    <script src="dist/app.js"></script>
+  </body>
+</html>

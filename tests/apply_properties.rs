@@ -38,6 +38,17 @@ proptest! {
                 tags: Vec::new(),
                 status: Status::Pending,
                 run: None,
+                recurrence: None,
+                origin: None,
+                after: vec![],
+                on_success: vec![],
+                on_failure: vec![],
+                on_missed: vec![],
+                retry: None,
+                expect_by: None,
+                approval: None,
+                when: None,
+                agent: None,
             }],
         };
         context.store.set_plan(&plan, HistoryPolicy::Preserve).unwrap();

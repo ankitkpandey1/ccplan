@@ -6,6 +6,17 @@ This project follows Keep a Changelog and uses Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- **Cockpit desktop app** (`cockpit/`): a native [Tauri](https://tauri.app) app over the ccplan
+  engine — a real GUI with a clickable day timeline, a New-block form, and one-click done/skip/
+  snooze/approve, plus Upcoming, Automations, Agents, Activity, and Approvals views. Backend is
+  thin: reads go through the pure `ccplan::gui::model` view-model builders (100% test coverage);
+  every mutation is funnelled through `ccplan::run` (the same entrypoint as the CLI) so all domain
+  invariants are reused, not re-implemented. Cross-platform (system WebView; .app/.dmg, .msi,
+  AppImage). `ccplan gui` launches it. See `cockpit/README.md`. (Replaces the earlier egui
+  prototype, which is removed.)
+
 ## [1.2.0] - 2026-06-16
 
 ### Added

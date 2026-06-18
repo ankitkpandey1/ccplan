@@ -1,6 +1,6 @@
 use ccplan::model::{
-    Block, BlockId, ClockTime, DurationSpec, Lead, Plan, PlanDate, PlanError, Run, ScheduleRev,
-    Span, Status, TimeZoneName, ValidationError,
+    Block, BlockId, ClockTime, DurationSpec, Lead, Plan, PlanDate, PlanError, RecurRule, Run,
+    ScheduleRev, Span, Status, TimeZoneName, ValidationError, Weekday,
 };
 
 const PLAN_TOML: &str = r#"
@@ -287,6 +287,109 @@ fn schedule_rev_is_displayable_even_for_incomplete_draft_blocks() {
     assert_eq!(rev.to_string(), rev.as_str());
 }
 
+#[test]
+fn recurrence_toml_round_trip_exercises_serialization() {
+    // Exercises recur_rule_to_every and Weekday::Display/FromStr in the integration test CGU.
+    let toml = r#"
+date = "2026-06-08"
+timezone = "Asia/Kolkata"
+
+[[block]]
+id     = "standup"
+title  = "Daily standup"
+start  = "09:00"
+end    = "09:15"
+every  = "weekly:mon,wed,fri"
+anchor = "2026-06-01"
+count  = 5
+"#;
+    let plan = Plan::from_toml(toml).expect("recurrence plan should parse");
+    let rec = plan.blocks[0].recurrence.as_ref().unwrap();
+    assert!(matches!(
+        &rec.rule,
+        RecurRule::Weekly(days) if days == &[Weekday::Monday, Weekday::Wednesday, Weekday::Friday]
+    ));
+
+    let written = plan.to_toml().expect("recurrence plan should serialize");
+    assert!(written.contains("weekly:"));
+    let plan2 = Plan::from_toml(&written).expect("re-parsed plan should be valid");
+    assert_eq!(plan2.blocks[0].recurrence, plan.blocks[0].recurrence);
+}
+
+#[test]
+fn recurrence_every_n_weeks_round_trips_integration() {
+    let toml = r#"
+date = "2026-06-08"
+timezone = "Asia/Kolkata"
+
+[[block]]
+id     = "review"
+title  = "Biweekly review"
+start  = "14:00"
+end    = "15:00"
+every  = "2w"
+anchor = "2026-06-01"
+"#;
+    let plan = Plan::from_toml(toml).expect("2w recurrence should parse");
+    assert!(matches!(
+        plan.blocks[0].recurrence.as_ref().unwrap().rule,
+        RecurRule::EveryNWeeks(2)
+    ));
+    let written = plan.to_toml().expect("should serialize");
+    assert!(written.contains("every = \"2w\""));
+    let plan2 = Plan::from_toml(&written).expect("re-parsed plan should be valid");
+    assert_eq!(plan2.blocks[0].recurrence, plan.blocks[0].recurrence);
+}
+
+#[test]
+fn anchor_without_every_ignored_integration() {
+    let toml = r#"
+date = "2026-06-08"
+timezone = "Asia/Kolkata"
+
+[[block]]
+id     = "task"
+title  = "One-off task"
+start  = "10:00"
+end    = "10:30"
+anchor = "2026-06-01"
+"#;
+    let plan = Plan::from_toml(toml).expect("anchor without every should parse silently");
+    assert!(plan.blocks[0].recurrence.is_none());
+}
+
+#[test]
+fn const_constructors_and_try_from_in_integration_binary() {
+    // Exercises DurationSpec::from_seconds_const, Plan::try_from, and Block::try_from
+    // in the integration test CGU so those function instances have non-zero coverage.
+    assert_eq!(
+        DurationSpec::from_seconds_const(1800).unwrap().as_seconds(),
+        1800
+    );
+    assert!(DurationSpec::from_seconds_const(0).is_none());
+    assert!(DurationSpec::from_seconds_const(86401).is_none());
+    assert_eq!(Lead::from_seconds_const(300).as_seconds(), 300);
+
+    // Exercise Plan::from_toml path, which internally calls from_raw (the preferred path).
+    // Also call to_toml to exercise serialization and schedule_revs.
+    let plan = Plan::from_toml(
+        r#"
+date = "2026-06-08"
+timezone = "Asia/Kolkata"
+
+[[block]]
+id    = "t"
+title = "T"
+start = "10:00"
+end   = "10:30"
+"#,
+    )
+    .unwrap();
+    let _ = plan.to_toml().unwrap();
+    let revs = plan.schedule_revs();
+    assert_eq!(revs.len(), 1);
+}
+
 fn valid_plan() -> Plan {
     Plan {
         date: "2026-06-08".parse::<PlanDate>().unwrap(),
@@ -305,5 +408,16 @@ fn valid_block(id: &str) -> Block {
         tags: vec!["deep-work".to_owned()],
         status: Status::Pending,
         run: None,
+        recurrence: None,
+        origin: None,
+        after: vec![],
+        on_success: vec![],
+        on_failure: vec![],
+        on_missed: vec![],
+        retry: None,
+        expect_by: None,
+        approval: None,
+        when: None,
+        agent: None,
     }
 }

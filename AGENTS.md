@@ -72,14 +72,17 @@ JSON contract:
 }
 ```
 
-The server exposes 16 tools: `ccplan_plan_day`, `ccplan_apply`, `ccplan_show_plan`,
+The server exposes 19 tools: `ccplan_plan_day`, `ccplan_apply`, `ccplan_show_plan`,
 `ccplan_list_now`, `ccplan_list_next`, `ccplan_show_agenda`, `ccplan_add_block`,
 `ccplan_add_reminder`, `ccplan_mark_block`, `ccplan_edit_block`, `ccplan_remove_block`,
 `ccplan_snooze_block`, `ccplan_save_template`, `ccplan_list_templates`, `ccplan_apply_template`,
-`ccplan_fire_log`.
+`ccplan_fire_log`, `ccplan_materialize`, `ccplan_diff`, `ccplan_approve`.
 
 `ccplan_fire_log` closes the loop: it returns the fire ledger (what notified/activated/missed/
 closed, optionally `since` a given instant) so the agent can see what the scheduler did while it was
 away and re-plan from there. Read-only — it never fires anything.
 
-`fire`, `mcp`, and `completions` are never exposed as MCP tools.
+`ccplan_diff` lists blocks awaiting approval; `ccplan_approve` unblocks them. Blocks with `run:`
+default to `approval = "pending"` — approve explicitly before they fire.
+
+`fire`, `roll`, `serve`, `mcp`, and `completions` are never exposed as MCP tools.

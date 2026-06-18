@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 6f0addd46372a89a75794ce62c802de76ffa6a2102c09fa09d7b4375d14ba2eb # shrinks to plan = Plan { date: PlanDate(2026-06-08), timezone: TimeZoneName("Asia/Kolkata"), blocks: [Block { id: BlockId("block-0"), title: " ", start: ClockTime { minutes_since_midnight: 0 }, span: Duration(DurationSpec { seconds: 60 }), notify: Lead { seconds: 0 }, tags: [], status: Pending, run: Some(Run(["_"])), recurrence: None, origin: None, after: [], on_success: [], on_failure: [], on_missed: [], retry: None, expect_by: None, approval: None, agent: None }] }

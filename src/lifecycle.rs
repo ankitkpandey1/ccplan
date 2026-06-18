@@ -6,7 +6,7 @@ use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    model::{Block, BlockId, Plan, Status},
+    model::{Approval, Block, BlockId, Plan, Status},
     time::{TimeError, resolve_block_end, resolve_block_start},
 };
 
@@ -148,6 +148,10 @@ fn decide_start(
         return FireDecision::NoOp;
     }
 
+    if awaiting_approval(block) {
+        return FireDecision::NoOp;
+    }
+
     if is_overdue(scheduled_at, now, grace) {
         FireDecision::MarkMissed
     } else {
@@ -155,6 +159,11 @@ fn decide_start(
             run: block.run.is_some(),
         }
     }
+}
+
+#[must_use]
+pub fn awaiting_approval(block: &Block) -> bool {
+    block.run.is_some() && block.approval != Some(Approval::Approved)
 }
 
 /// Computes status updates for blocks whose missed/expired windows elapsed while no trigger fired.

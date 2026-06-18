@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="auto">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ccplan</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <!-- Draggable title strip keeps the macOS traffic lights clear of content. -->
+    <div class="titlebar" data-tauri-drag-region></div>
+
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="brand-mark">◴</span>
+          <span class="brand-name">ccplan</span>
+        </div>
+
+        <nav class="nav" id="nav">
+          <button class="nav-item active" data-view="today">
+            <span class="nav-ico">◎</span><span class="nav-label">Today</span>
+          </button>
+          <button class="nav-item" data-view="upcoming">
+            <span class="nav-ico">▦</span><span class="nav-label">Upcoming</span>
+          </button>
+          <button class="nav-item" data-view="automations">
+            <span class="nav-ico">↻</span><span class="nav-label">Automations</span>
+          </button>
+          <button class="nav-item" data-view="approvals">
+            <span class="nav-ico">⎙</span><span class="nav-label">Approvals</span>
+            <span class="nav-badge" id="approvalsBadge" hidden></span>
+          </button>
+          <button class="nav-item" data-view="activity">
+            <span class="nav-ico">≣</span><span class="nav-label">Activity</span>
+          </button>
+          <button class="nav-item" data-view="agents">
+            <span class="nav-ico">⚡</span><span class="nav-label">Agents</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-foot">
+          <button class="ghost-btn" id="refreshBtn" title="Refresh">↻ Refresh</button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div class="topbar-left">
+            <button class="chev" id="prevDay" title="Previous day">‹</button>
+            <div class="topbar-title">
+              <h1 id="viewTitle">Today</h1>
+              <p id="viewSub" class="sub"></p>
+            </div>
+            <button class="chev" id="nextDay" title="Next day">›</button>
+            <button class="today-btn" id="todayBtn" hidden>Today</button>
+          </div>
+          <div class="topbar-right">
+            <button class="primary-btn" id="newBlockBtn">＋ New block</button>
+          </div>
+        </header>
+
+        <section class="content" id="content"><!-- views render here --></section>
+      </main>
+
+      <aside class="rail">
+        <div class="rail-head">Up next</div>
+        <div id="rail" class="rail-body"><!-- up-next renders here --></div>
+      </aside>
+    </div>
+
+    <!-- New / edit block sheet -->
+    <div class="sheet-backdrop" id="sheetBackdrop" hidden>
+      <form class="sheet" id="blockForm">
+        <h2 id="sheetTitle">New block</h2>
+        <label class="field">
+          <span>Title</span>
+          <input id="f_title" type="text" placeholder="e.g. Deep work" autocomplete="off" required />
+        </label>
+        <div class="field-row">
+          <label class="field">
+            <span>Start</span>
+            <input id="f_start" type="time" required />
+          </label>
+          <label class="field">
+            <span>Duration</span>
+            <select id="f_duration">
+              <option value="15m">15 min</option>
+              <option value="30m" selected>30 min</option>
+              <option value="45m">45 min</option>
+              <option value="1h">1 hour</option>
+              <option value="1h30m">1½ hours</option>
+              <option value="2h">2 hours</option>
+            </select>
+          </label>
+        </div>
+        <label class="field">
+          <span>Tags <em>optional, comma-separated</em></span>
+          <input id="f_tags" type="text" placeholder="focus, work" autocomplete="off" />
+        </label>
+        <p class="sheet-error" id="sheetError" hidden></p>
+        <div class="sheet-actions">
+          <button type="button" class="ghost-btn" id="sheetCancel">Cancel</button>
+          <button type="submit" class="primary-btn" id="sheetSave">Add block</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="toast" id="toast" hidden></div>
+
+    <script src="app.js"></script>
+  </body>
+</html>

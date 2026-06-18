@@ -4,7 +4,7 @@ use ccplan::{
         reconcile_overdue,
     },
     model::{
-        Block, BlockId, ClockTime, DurationSpec, Lead, Plan, PlanDate, Run, Span, Status,
+        Approval, Block, BlockId, ClockTime, DurationSpec, Lead, Plan, PlanDate, Run, Span, Status,
         TimeZoneName,
     },
 };
@@ -86,6 +86,25 @@ fn fire_start_on_time_includes_run_when_block_has_run() {
     );
 
     assert_eq!(decision, FireDecision::Activate { run: true });
+}
+
+#[test]
+fn fire_start_pending_approval_noops() {
+    let mut block = block_with(
+        Status::Pending,
+        Some(Run::new(vec!["/bin/echo".to_owned(), "hello".to_owned()]).unwrap()),
+    );
+    block.approval = Some(Approval::Pending);
+
+    let decision = decide_fire(
+        &block,
+        Event::Start,
+        target(),
+        target(),
+        policy(EndBehavior::Expire),
+    );
+
+    assert_eq!(decision, FireDecision::NoOp);
 }
 
 #[test]
@@ -306,6 +325,9 @@ fn plan_with(blocks: Vec<Block>) -> Plan {
 fn block_with(status: Status, run: Option<Run>) -> Block {
     let mut block = block_with_id("focus", status, "09:00", Span::End(wallclock("09:30")));
     block.run = run;
+    if block.run.is_some() {
+        block.approval = Some(Approval::Approved);
+    }
     block
 }
 
@@ -319,6 +341,17 @@ fn block_with_id(id: &str, status: Status, start: &str, span: Span) -> Block {
         tags: Vec::new(),
         status,
         run: None,
+        recurrence: None,
+        origin: None,
+        after: vec![],
+        on_success: vec![],
+        on_failure: vec![],
+        on_missed: vec![],
+        retry: None,
+        expect_by: None,
+        approval: None,
+        when: None,
+        agent: None,
     }
 }
 

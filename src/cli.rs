@@ -36,14 +36,22 @@ pub enum Commands {
     Next(ReadArgs),
     Agenda(AgendaArgs),
     Watch(WatchArgs),
+    Serve(ServeArgs),
     Apply(ApplyArgs),
+    Diff(DiffArgs),
+    Approve(ApproveArgs),
+    Materialize(MaterializeArgs),
     Fire(FireArgs),
+    #[command(hide = true)]
+    Roll,
     Log(LogArgs),
     Template(TemplateArgs),
     Status,
     Doctor,
     Completions(CompletionsArgs),
     Mcp(McpArgs),
+    /// Open the Cockpit desktop app.
+    Gui,
 }
 
 #[derive(Debug, Args)]
@@ -76,6 +84,19 @@ pub struct AddArgs {
     pub tags: Vec<String>,
     #[arg(long, num_args = 1.., value_name = "ARGV")]
     pub run: Vec<String>,
+    #[arg(long)]
+    pub every: Option<String>,
+    #[arg(long)]
+    pub until: Option<PlanDate>,
+    #[arg(long)]
+    pub count: Option<u32>,
+    #[arg(long, value_delimiter = ',')]
+    pub after: Vec<BlockId>,
+    /// Retry policy as COUNT:BACKOFF, e.g. `3:30s`.
+    #[arg(long)]
+    pub retry: Option<String>,
+    #[arg(long = "expect-by")]
+    pub expect_by: Option<DurationSpec>,
 }
 
 #[derive(Debug, Args)]
@@ -165,12 +186,41 @@ pub struct WatchArgs {
     pub every: DurationSpec,
 }
 
+/// `serve` runs the optional resident daemon for reactive local automations.
+#[derive(Debug, Args)]
+pub struct ServeArgs {
+    #[arg(long)]
+    pub date: Option<PlanDate>,
+    /// Agent name this serve process claims work for.
+    #[arg(long)]
+    pub agent: Option<String>,
+    /// Poll interval, e.g. `30s`, `1m`, `5m` (default `30s`, max 24h).
+    #[arg(long = "every", default_value = "30s")]
+    pub every: DurationSpec,
+    /// Run one polling tick and exit. Useful for tests and supervised invocations.
+    #[arg(long)]
+    pub once: bool,
+}
+
 #[derive(Debug, Args)]
 pub struct ApplyArgs {
     #[arg(long)]
     pub date: Option<PlanDate>,
     #[arg(long)]
     pub dry_run: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct DiffArgs {
+    #[arg(long)]
+    pub date: Option<PlanDate>,
+}
+
+#[derive(Debug, Args)]
+pub struct ApproveArgs {
+    pub id: BlockId,
+    #[arg(long)]
+    pub date: Option<PlanDate>,
 }
 
 #[derive(Debug, Args)]
@@ -185,8 +235,18 @@ pub struct FireArgs {
     pub rev: ScheduleRev,
     #[arg(long)]
     pub at: Timestamp,
+    #[arg(long, default_value = "0")]
+    pub attempt: u32,
     #[arg(long)]
     pub dry_run: bool,
+}
+
+/// `materialize` expands recurring rules into concrete dated occurrences.
+#[derive(Debug, Args)]
+pub struct MaterializeArgs {
+    /// Number of days ahead to materialize (default 14).
+    #[arg(long, default_value = "14")]
+    pub horizon: u32,
 }
 
 /// `log` reads the fire ledger — what the scheduler actually did — for close-the-loop re-planning.
@@ -217,7 +277,7 @@ pub enum TemplateCommand {
     /// List saved template names.
     List,
     /// Instantiate a template onto a date (resets statuses to pending) and apply it.
-    Apply(TemplateNameArgs),
+    Apply(TemplateApplyArgs),
 }
 
 #[derive(Debug, Args)]
@@ -225,6 +285,15 @@ pub struct TemplateNameArgs {
     pub name: String,
     #[arg(long)]
     pub date: Option<PlanDate>,
+}
+
+#[derive(Debug, Args)]
+pub struct TemplateApplyArgs {
+    pub name: String,
+    #[arg(long)]
+    pub date: Option<PlanDate>,
+    #[arg(long = "var", value_name = "NAME=VALUE")]
+    pub vars: Vec<String>,
 }
 
 #[derive(Debug, Args)]

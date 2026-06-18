@@ -65,17 +65,18 @@ human can both edit.
 
 ## 4. Non-goals
 
-- **NG1** — Multi-day project management, GTD, dependencies, recurring/repeating tasks. One day at a time.
-- **NG2** — Cloud sync, multi-device, mobile, accounts.
-- **NG3** — Calendar integration (CalDAV / Google / Online Accounts). Possible future *import*.
-- **NG4** — A GUI. (A read-only TUI/`watch` view is a possible future addition; not core.)
-- **NG5** — A general-purpose job scheduler / cron replacement. `run:` is scoped to "this block, today."
-- **NG6** — Sandboxing/containment of `run:` commands. We mitigate (§9) but do not sandbox.
-- **NG7** — Multi-user / shared / team plans.
-- **NG8** — Catch-up replay of alerts/automation missed while the machine was off/asleep. Stale
+- **NG1** — Cloud sync, multi-device, mobile, accounts.
+- **NG2** — Calendar integration (CalDAV / Google / Online Accounts). Possible future *import*.
+- **NG3** — A Turing-complete expression language in TOML. Workflow primitives only (deps,
+  conditions, retry, variables); no scripting surface in the plan file.
+- **NG4** — Sandboxing/containment of `run:` commands. We mitigate (§9) but do not sandbox.
+- **NG5** — Multi-user / shared / team plans (multi-agent fleet is single-machine coordination only).
+- **NG6** — Catch-up replay of alerts/automation missed while the machine was off/asleep. Stale
   automation is worse than missed automation (Inv-6).
-- **NG9** — No shell execution. `run:` is an argv vector only; there is no `sh -c` / shell-string
+- **NG7** — No shell execution. `run:` is an argv vector only; there is no `sh -c` / shell-string
   mode. This deliberately keeps the highest-risk path out of the design (§9).
+- **NG8** — Embedded LLM. NL routes to an external configured agent via MCP; the binary embeds no
+  model and makes no network calls to AI services.
 
 ## 5. Users & primary flows
 

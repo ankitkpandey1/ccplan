@@ -14,10 +14,13 @@ mod commands;
 pub mod config;
 pub mod context;
 pub mod error;
+pub mod gui;
 pub mod lifecycle;
 pub mod mcp;
 pub mod model;
 mod platform;
+pub(crate) mod recurrence;
+pub(crate) mod serve;
 pub mod store;
 pub mod time;
 

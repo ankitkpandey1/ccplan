@@ -1,0 +1,27 @@
+[package]
+name = "cockpit"
+version = "1.2.0"
+edition = "2024"
+rust-version = "1.94"
+description = "ccplan Cockpit — native desktop app over the ccplan engine."
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Standalone workspace: kept out of ccplan's root workspace (which `exclude`s this dir)
+# so the GUI's WebKit deps and untested IO never touch ccplan's strict gate.
+[workspace]
+
+[[bin]]
+name = "cockpit"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+jiff = { version = "0.2", features = ["serde"] }
+ccplan = { path = "../.." }

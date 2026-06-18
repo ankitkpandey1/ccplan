@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'input=$(cat); if echo \"$input\" | grep -qE \"python3 - <<|python3 -c \"; then echo \"BLOCKED: use scripts/find_missed_lines.py instead of inline python3\" >&2; exit 2; fi'"
+          }
+        ]
+      }
+    ]
+  }
+}

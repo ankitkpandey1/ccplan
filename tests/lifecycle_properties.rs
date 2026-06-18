@@ -1,6 +1,6 @@
 use ccplan::{
     lifecycle::{EndBehavior, Event, FireDecision, LifecyclePolicy, decide_fire},
-    model::{Block, BlockId, ClockTime, DurationSpec, Lead, Run, Span, Status},
+    model::{Approval, Block, BlockId, ClockTime, DurationSpec, Lead, Run, Span, Status},
 };
 use jiff::{SignedDuration, Timestamp};
 use proptest::prelude::*;
@@ -71,6 +71,8 @@ fn terminal_status_strategy() -> impl Strategy<Value = Status> {
 }
 
 fn block_with(status: Status, has_run: bool) -> Block {
+    let run = has_run.then(|| Run::new(vec!["/bin/echo".to_owned()]).unwrap());
+    let approval = run.as_ref().map(|_| Approval::Approved);
     Block {
         id: BlockId::new("focus").unwrap(),
         title: "Focus".to_owned(),
@@ -79,7 +81,18 @@ fn block_with(status: Status, has_run: bool) -> Block {
         notify: Lead::from_seconds(0).unwrap(),
         tags: Vec::new(),
         status,
-        run: has_run.then(|| Run::new(vec!["/bin/echo".to_owned()]).unwrap()),
+        run,
+        recurrence: None,
+        origin: None,
+        after: vec![],
+        on_success: vec![],
+        on_failure: vec![],
+        on_missed: vec![],
+        retry: None,
+        expect_by: None,
+        approval,
+        when: None,
+        agent: None,
     }
 }
 

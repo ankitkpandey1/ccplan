@@ -7,6 +7,7 @@ Write a plain-text plan — or have an agent write it — and ccplan turns it in
 notifications, status tracking, and time-triggered commands. No daemon, no account, no cloud.
 
 [![CI](https://github.com/ankitkpandey1/ccplan/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ankitkpandey1/ccplan/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/ccplan)](https://crates.io/crates/ccplan)
 [![release](https://img.shields.io/github/v/release/ankitkpandey1/ccplan?sort=semver)](https://github.com/ankitkpandey1/ccplan/releases/latest)
 [![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
 
@@ -43,10 +44,12 @@ follows its recipe (authoring, exit codes, JSON contract). Prefer to drive it yo
 
 ## What it is
 
-ccplan plans your day as a list of **time blocks**. Each block can **alert you** with a desktop
-notification, be **marked done or skipped**, and optionally **run a command** when it starts — kick
-off a sync, open a doc, start a build. The plan is one plain-text [TOML](#the-plan-file) file you can
-hand-edit or let an agent author end to end.
+ccplan is a **local orchestration engine** — a planner for anything that acts over time. Each block
+can **alert you** with a desktop notification, be **marked done or skipped**, **run a command** on a
+schedule, **recur** on a pattern, and chain into other blocks via dependencies, conditional
+successors, and automatic retries. The plan is one plain-text [TOML](#the-plan-file) file you can
+hand-edit or let an agent author end to end. No daemon required for tiers 1–2; the optional
+`serve` daemon adds reactive triggers and multi-agent fleet coordination.
 
 |  | Agent can fill it | Desktop alerts | Mark done | Run a command at a time | Cross-platform |
 |---|:---:|:---:|:---:|:---:|:---:|
@@ -69,6 +72,9 @@ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/ankitkpandey1/ccplan/re
 
 # Windows (PowerShell)
 powershell -c "irm https://github.com/ankitkpandey1/ccplan/releases/latest/download/ccplan-installer.ps1 | iex"
+
+# From crates.io (any platform with a Rust toolchain)
+cargo install ccplan
 ```
 
 Every release ships signed-checksum archives for Linux (x64/ARM64) and macOS (Intel/Apple Silicon),
@@ -119,6 +125,16 @@ notify = "5m"                      # lead-time notification before start
 tags   = ["deep-work"]
 status = "pending"                 # pending | active | done | skipped | missed | expired
 
+# Orchestration fields (all optional):
+every    = "weekday"               # daily | weekday | weekend | weekly:mon,wed | Nd | Nw
+until    = "2026-12-31"            # optional; XOR with count
+after    = ["backup"]              # run only after these block ids are done
+on_success = ["notify-team"]       # conditional successors by outcome
+on_failure = ["alert-me"]
+retry    = { count = 3, backoff = "30s" }
+expect_by = "25h"                  # dead-man: alert if not succeeded within this window
+approval = "pending"               # pending | approved — blocks with run: start as pending
+
 [[block]]
 id       = "sync-1"
 title    = "Agentic sync-up"
@@ -126,6 +142,7 @@ start    = "11:30"
 duration = "30m"
 notify   = "2m"
 run      = ["/home/me/bin/sync.sh", "--fast"]   # argv vector (no shell) — must be allow-listed
+approval = "approved"              # explicitly approved to run
 status   = "pending"
 ```
 
@@ -146,13 +163,16 @@ An agent authors the whole day in one shot by piping TOML into `ccplan set --fro
 | Command | Purpose |
 |---|---|
 | `ccplan set --from <file\|-> [--override-history]` | Replace the whole day. Terminal blocks (done/skipped/missed/expired) are always kept; changing them needs `--override-history`. |
-| `ccplan add --title T --start 11:00 [--end\|--duration] [--notify] [--run …] [--id]` | Add or update one block. |
+| `ccplan add --title T --start 11:00 [--end\|--duration] [--notify] [--run …] [--id]` | Add or update one block. Supports `--every`, `--until`, `--count`, `--after`, `--retry`, `--expect-by`. |
 | `ccplan remind "T" --in 30m [--id]` | One-shot reminder: add a zero-lead block at now+duration and apply it in one step. |
 | `ccplan edit <id> [--start …] [--title …] …` | Patch a non-terminal block. |
 | `ccplan rm <id>` | Remove a pending block. |
 | `ccplan done <id>` / `ccplan skip <id>` | Mark a block complete / skipped. |
 | `ccplan snooze <id> --by 10m` | Push a non-terminal block later and re-apply (refused if it would cross midnight). |
-| `ccplan template save\|apply <name> [--date]` / `ccplan template list` | Capture a day shape once, then stamp it onto any date (statuses reset, then applied). |
+| `ccplan template save\|apply <name> [--date]` / `ccplan template list` | Capture a day shape once, stamp it onto any date (statuses reset), supports `${var}` substitution. |
+| `ccplan materialize [--horizon N]` | Expand recurring rules into concrete dated occurrences (default 14 days). |
+| `ccplan diff [--date]` | Show blocks awaiting approval before they can fire. |
+| `ccplan approve <id> [--date]` | Approve a pending `run:` block so it fires normally. |
 | `ccplan clear --yes` | Archive the day and remove its triggers (`--purge` to delete instead). |
 
 **Reading** — all support `--json`
@@ -164,6 +184,7 @@ An agent authors the whole day in one shot by piping TOML into `ccplan set --fro
 | `ccplan next` | Array of the next upcoming block(s). |
 | `ccplan agenda` | Remaining blocks with countdowns. |
 | `ccplan log [--date <d>] [--since <rfc3339>]` | The fire ledger — what the scheduler actually did (notify/activate/missed/close). |
+| `ccplan status` | Scheduler health + dead-man check for `expect_by` blocks. |
 
 `ccplan watch [--every <dur>]` is a live, auto-refreshing view of the agenda for leaving open in a
 terminal (human-only, no `--json`; default refresh `30s`; Ctrl-C or Enter to quit).
@@ -173,11 +194,11 @@ terminal (human-only, no `--json`; default refresh `30s`; Ctrl-C or Enter to qui
 | Command | Purpose |
 |---|---|
 | `ccplan apply [--dry-run]` | Reconcile OS triggers to match the plan (idempotent). |
-| `ccplan status` | Scheduler health: tracked vs. live OS triggers. |
+| `ccplan serve` | Long-running daemon (opt-in): reactive file/command triggers + multi-agent fleet. |
 | `ccplan doctor` | Check the native scheduler + notifier are usable; print fixes. |
 | `ccplan completions <shell>` | Print shell completions (bash/zsh/fish/powershell). |
 
-`ccplan fire …` exists but is internal — it's what the OS invokes when a block triggers.
+`ccplan fire …` and `ccplan roll` are internal — invoked by the OS scheduler, not by humans.
 
 **Exit codes:** `0` ok · `2` usage/validation · `3` not found · `4` scheduler failure ·
 `5` automation refused · `6` history conflict (needs `--override-history`). No command is ever
@@ -201,17 +222,17 @@ server over stdio (JSON-RPC 2.0, newline-delimited). Wire it into any MCP host:
 }
 ```
 
-**Exposed tools** (16 total):
+**Exposed tools** (19 total):
 
 | Tool | What it does |
 |---|---|
-| `ccplan_plan_day` | Replace the whole day from a JSON blocks array |
+| `ccplan_plan_day` | Replace the whole day from a JSON blocks array (supports orchestration fields) |
 | `ccplan_apply` | Reconcile OS triggers to match the current plan |
 | `ccplan_show_plan` | Return the full plan as JSON |
 | `ccplan_list_now` | Blocks active right now (`[]` if none) |
 | `ccplan_list_next` | Next upcoming block(s) (`[]` if none) |
 | `ccplan_show_agenda` | Remaining blocks with countdowns |
-| `ccplan_add_block` | Add or update one block |
+| `ccplan_add_block` | Add or update one block (supports orchestration fields) |
 | `ccplan_add_reminder` | One-shot relative reminder (add + apply) |
 | `ccplan_mark_block` | Mark a block done or skipped |
 | `ccplan_edit_block` | Patch title, time, notify, or run on a non-terminal block |
@@ -221,6 +242,9 @@ server over stdio (JSON-RPC 2.0, newline-delimited). Wire it into any MCP host:
 | `ccplan_list_templates` | List saved template names |
 | `ccplan_apply_template` | Instantiate a template onto a date (statuses reset) and apply |
 | `ccplan_fire_log` | Read the fire ledger — what fired while you were away (`[]` if none) |
+| `ccplan_materialize` | Expand recurring rules into dated occurrences over a horizon |
+| `ccplan_diff` | List blocks awaiting approval before they can fire |
+| `ccplan_approve` | Approve a pending `run:` block so it fires normally |
 
 **Close the loop.** `ccplan_fire_log` is the read side of the agent loop: the scheduler fires
 blocks on real OS time, and the agent calls `ccplan_fire_log` (optionally `since` the last time it
@@ -228,8 +252,8 @@ looked) to see what actually happened — what notified, what `run:` activated, 
 re-plans from there. Each entry is `{ ts, date, id, event, outcome, detail }`. It's read-only: it
 observes history and never fires anything.
 
-`fire`, `mcp`, and `completions` are **never** exposed as MCP tools. No tool can modify
-`automation.enabled` or the allowlist. When a `run:` command is stored but would not execute
+`fire`, `roll`, `serve`, `mcp`, and `completions` are **never** exposed as MCP tools. No tool can
+modify `automation.enabled` or the allowlist. When a `run:` command is stored but would not execute
 (automation disabled or executable not allowlisted), the tool result includes a `WARNING` line.
 
 ---
@@ -311,6 +335,16 @@ cd ccplan
 cargo build --release
 ./target/release/ccplan --help
 ```
+
+**Cockpit** is the native desktop app — a real GUI (clickable day timeline, New-block form,
+one-click done/skip/snooze/approve) built with [Tauri](https://tauri.app) over the same engine.
+It lives in [`cockpit/`](cockpit/README.md) and builds separately (it needs the platform WebView):
+
+```sh
+cd cockpit/src-tauri && cargo tauri build   # .app/.dmg, .msi, or AppImage
+```
+
+`ccplan gui` launches the Cockpit app when the `cockpit` binary sits next to `ccplan`.
 
 Design notes and invariants live in [`DESIGN.md`](DESIGN.md).
 

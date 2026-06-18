@@ -17,7 +17,7 @@ use crate::{
         DoctorCheck, fire_args,
         format::{parse_timer_units, systemd_calendar, systemd_unit_name},
     },
-    store::TriggerRecord,
+    store::{TriggerKind, TriggerRecord},
 };
 
 #[derive(Debug, Clone)]
@@ -72,6 +72,9 @@ impl Scheduler for NativeScheduler {
             .arg(format!("--unit={unit}"))
             .arg(format!("--on-calendar={calendar}"))
             .arg("--timer-property=AccuracySec=1s");
+        if trigger.kind == TriggerKind::Roll {
+            command.arg("--timer-property=Persistent=false");
+        }
         for (name, value) in scheduler_environment() {
             command.arg(format!("--setenv={name}={value}"));
         }

@@ -24,14 +24,24 @@ pub(crate) fn command() -> Command {
         .subcommand(read_command("next"))
         .subcommand(read_command("agenda"))
         .subcommand(watch_command())
+        .subcommand(serve_command())
         .subcommand(apply_command())
+        .subcommand(diff_command())
+        .subcommand(approve_command())
+        .subcommand(materialize_command())
         .subcommand(fire_command())
+        .subcommand(Command::new("roll").hide(true))
         .subcommand(log_command())
         .subcommand(template_command())
         .subcommand(Command::new("status"))
         .subcommand(Command::new("doctor"))
         .subcommand(completions_command())
         .subcommand(Command::new("mcp"))
+        .subcommand(gui_command())
+}
+
+fn gui_command() -> Command {
+    Command::new("gui").about("Open the Cockpit desktop app")
 }
 
 fn set_command() -> Command {
@@ -57,6 +67,12 @@ fn add_command() -> Command {
         .arg(Arg::new("notify").long("notify"))
         .arg(Arg::new("tags").long("tags").value_delimiter(','))
         .arg(Arg::new("run").long("run").value_name("ARGV").num_args(1..))
+        .arg(Arg::new("every").long("every"))
+        .arg(Arg::new("until").long("until").value_name(DATE))
+        .arg(Arg::new("count").long("count"))
+        .arg(Arg::new("after").long("after").value_delimiter(','))
+        .arg(Arg::new("retry").long("retry").value_name("COUNT:BACKOFF"))
+        .arg(Arg::new("expect_by").long("expect-by"))
 }
 
 fn remind_command() -> Command {
@@ -107,10 +123,37 @@ fn watch_command() -> Command {
         .arg(Arg::new("every").long("every").default_value("30s"))
 }
 
+fn serve_command() -> Command {
+    Command::new("serve")
+        .arg(date_arg())
+        .arg(Arg::new("agent").long("agent").value_name("NAME"))
+        .arg(Arg::new("every").long("every").default_value("30s"))
+        .arg(flag("once", "once"))
+}
+
 fn apply_command() -> Command {
     Command::new("apply")
         .arg(date_arg())
         .arg(flag("dry_run", "dry-run"))
+}
+
+fn diff_command() -> Command {
+    Command::new("diff").arg(date_arg())
+}
+
+fn approve_command() -> Command {
+    Command::new("approve")
+        .arg(Arg::new("id").required(true).value_name(ID))
+        .arg(date_arg())
+}
+
+fn materialize_command() -> Command {
+    Command::new("materialize").arg(
+        Arg::new("horizon")
+            .long("horizon")
+            .default_value("14")
+            .value_name("N"),
+    )
 }
 
 fn fire_command() -> Command {
@@ -125,6 +168,7 @@ fn fire_command() -> Command {
         )
         .arg(Arg::new("rev").long("rev").required(true))
         .arg(Arg::new("at").long("at").required(true))
+        .arg(Arg::new("attempt").long("attempt").default_value("0"))
         .arg(flag("dry_run", "dry-run"))
 }
 
@@ -139,13 +183,25 @@ fn template_command() -> Command {
     Command::new("template")
         .subcommand(template_name_command("save"))
         .subcommand(Command::new("list"))
-        .subcommand(template_name_command("apply"))
+        .subcommand(template_apply_command())
 }
 
 fn template_name_command(name: &'static str) -> Command {
     Command::new(name)
         .arg(Arg::new("name").required(true).value_name("NAME"))
         .arg(date_arg())
+}
+
+fn template_apply_command() -> Command {
+    Command::new("apply")
+        .arg(Arg::new("name").required(true).value_name("NAME"))
+        .arg(date_arg())
+        .arg(
+            Arg::new("vars")
+                .long("var")
+                .value_name("NAME=VALUE")
+                .action(ArgAction::Append),
+        )
 }
 
 fn completions_command() -> Command {

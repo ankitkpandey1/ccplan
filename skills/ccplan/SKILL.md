@@ -8,7 +8,9 @@ when-to-use: Use when planning a day with ccplan, scripting ccplan, or validatin
 # ccplan
 
 Use this skill to drive `ccplan` as an agent: install it without prompts, check the scheduler, write
-a whole day from stdin, apply native triggers, then inspect the result with JSON reads.
+a whole day from stdin, apply native triggers, then inspect the result with JSON reads. ccplan is a
+local orchestration engine — blocks can recur, chain via deps/successors, retry on failure, and
+require explicit approval before automation runs.
 
 <!-- ccplan-agent-recipe:start -->
 ## Canonical Agent Recipe
@@ -79,17 +81,20 @@ JSON contract:
 }
 ```
 
-The server exposes 16 tools: `ccplan_plan_day`, `ccplan_apply`, `ccplan_show_plan`,
+The server exposes 19 tools: `ccplan_plan_day`, `ccplan_apply`, `ccplan_show_plan`,
 `ccplan_list_now`, `ccplan_list_next`, `ccplan_show_agenda`, `ccplan_add_block`,
 `ccplan_add_reminder`, `ccplan_mark_block`, `ccplan_edit_block`, `ccplan_remove_block`,
 `ccplan_snooze_block`, `ccplan_save_template`, `ccplan_list_templates`, `ccplan_apply_template`,
-`ccplan_fire_log`.
+`ccplan_fire_log`, `ccplan_materialize`, `ccplan_diff`, `ccplan_approve`.
 
 `ccplan_fire_log` closes the loop: it returns the fire ledger (what notified/activated/missed/
 closed, optionally `since` a given instant) so the agent can see what the scheduler did while it was
 away and re-plan from there. Read-only — it never fires anything.
 
-`fire`, `mcp`, and `completions` are never exposed as MCP tools.
+Blocks with `run:` default to `approval = "pending"` — use `ccplan_approve` (or
+`ccplan approve <id>`) before they fire. `ccplan_diff` lists what needs approval.
+
+`fire`, `roll`, `serve`, `mcp`, and `completions` are never exposed as MCP tools.
 
 ## Smoke-Test Plan
 

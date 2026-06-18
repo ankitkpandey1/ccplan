@@ -2,7 +2,12 @@
 
 use std::io::Write;
 
-use crate::{context::ContextRefs, error::Result, model::PlanDate, store::TriggerRecord};
+use crate::{
+    context::ContextRefs,
+    error::Result,
+    model::PlanDate,
+    store::{TriggerKind, TriggerRecord},
+};
 
 mod format;
 mod notify;
@@ -104,7 +109,10 @@ fn timezone_doctor_check(system: &str, plan: Option<&str>) -> DoctorCheck {
 }
 
 fn fire_args(trigger: &TriggerRecord) -> Vec<String> {
-    vec![
+    if trigger.kind == TriggerKind::Roll {
+        return vec!["roll".to_owned()];
+    }
+    let mut args = vec![
         "fire".to_owned(),
         "--date".to_owned(),
         trigger.date.to_string(),
@@ -116,7 +124,12 @@ fn fire_args(trigger: &TriggerRecord) -> Vec<String> {
         trigger.rev.to_string(),
         "--at".to_owned(),
         trigger.scheduled_at.to_string(),
-    ]
+    ];
+    if trigger.attempt > 0 {
+        args.push("--attempt".to_owned());
+        args.push(trigger.attempt.to_string());
+    }
+    args
 }
 
 #[cfg(test)]
@@ -228,7 +241,7 @@ mod tests {
             Block, BlockId, ClockTime, DurationSpec, Lead, Plan, PlanDate, ScheduleRev, Span,
             Status,
         },
-        store::{HistoryPolicy, Store, TriggerRecord},
+        store::{HistoryPolicy, Store, TriggerKind, TriggerRecord},
         time::FixedClock,
     };
     use assert_fs::TempDir;
@@ -335,6 +348,8 @@ mod tests {
             event: Event::Start,
             rev: ScheduleRev::new("0123456789abcdef").unwrap(),
             scheduled_at: "2026-06-08T05:30:00Z".parse().unwrap(),
+            kind: TriggerKind::Fire,
+            attempt: 0,
         };
 
         assert_eq!(
@@ -357,6 +372,41 @@ mod tests {
             trigger_identity(&trigger.date, "abcd1234ef", &trigger.rev, trigger.event),
             "2026-06-08-abcd1234ef-0123456789abcdef-start"
         );
+    }
+
+    #[test]
+    fn roll_trigger_emits_only_roll_subcommand() {
+        let trigger = TriggerRecord {
+            backend_id: "roll-2026-06-09".to_owned(),
+            date: "2026-06-09".parse::<PlanDate>().unwrap(),
+            block_id: BlockId::new("roll").unwrap(),
+            event: Event::Start,
+            rev: ScheduleRev::new("0000000000000000").unwrap(),
+            scheduled_at: "2026-06-09T00:05:00Z".parse().unwrap(),
+            kind: TriggerKind::Roll,
+            attempt: 0,
+        };
+
+        assert_eq!(fire_args(&trigger), vec!["roll"]);
+    }
+
+    #[test]
+    fn fire_trigger_with_nonzero_attempt_includes_attempt_flag() {
+        let trigger = TriggerRecord {
+            backend_id: "2026-06-08-abc-0123456789abcdef-start".to_owned(),
+            date: "2026-06-08".parse::<PlanDate>().unwrap(),
+            block_id: BlockId::new("focus").unwrap(),
+            event: Event::Start,
+            rev: ScheduleRev::new("0123456789abcdef").unwrap(),
+            scheduled_at: "2026-06-08T05:30:00Z".parse().unwrap(),
+            kind: TriggerKind::Fire,
+            attempt: 2,
+        };
+
+        let args = fire_args(&trigger);
+        assert!(args.contains(&"--attempt".to_owned()));
+        let idx = args.iter().position(|a| a == "--attempt").unwrap();
+        assert_eq!(args[idx + 1], "2");
     }
 
     fn platform_context_at(
@@ -391,6 +441,17 @@ mod tests {
                 tags: Vec::new(),
                 status: Status::Pending,
                 run: None,
+                recurrence: None,
+                origin: None,
+                after: vec![],
+                on_success: vec![],
+                on_failure: vec![],
+                on_missed: vec![],
+                retry: None,
+                expect_by: None,
+                approval: None,
+                when: None,
+                agent: None,
             }],
         }
     }
