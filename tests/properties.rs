@@ -84,6 +84,7 @@ fn block_strategy() -> impl Strategy<Value = Block> {
                     retry: None,
                     expect_by: None,
                     approval,
+                    when: None,
                     agent: None,
                 }
             },

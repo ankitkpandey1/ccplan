@@ -934,6 +934,7 @@ fn parse_mcp_block(val: &Value, index: usize, default_lead: Lead) -> Result<Bloc
         retry: None,
         expect_by: None,
         approval,
+        when: None,
         agent: None,
     })
 }
@@ -1799,6 +1800,7 @@ mod tests {
                 retry: None,
                 expect_by: None,
                 approval: None,
+                when: None,
                 agent: None,
             }],
         };
@@ -2731,6 +2733,7 @@ mod tests {
                 retry: None,
                 expect_by: None,
                 approval: None,
+                when: None,
                 agent: None,
             }],
         };
@@ -2805,6 +2808,7 @@ mod tests {
                 retry: None,
                 expect_by: None,
                 approval: None,
+                when: None,
                 agent: None,
             }],
         };

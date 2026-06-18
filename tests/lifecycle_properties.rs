@@ -91,6 +91,7 @@ fn block_with(status: Status, has_run: bool) -> Block {
         retry: None,
         expect_by: None,
         approval,
+        when: None,
         agent: None,
     }
 }

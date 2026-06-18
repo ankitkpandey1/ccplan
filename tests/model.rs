@@ -417,6 +417,7 @@ fn valid_block(id: &str) -> Block {
         retry: None,
         expect_by: None,
         approval: None,
+        when: None,
         agent: None,
     }
 }

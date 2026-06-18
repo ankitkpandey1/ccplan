@@ -227,6 +227,8 @@ pub enum ValidationError {
     BothCountAndUntil { id: BlockId },
     #[error("block `{id}` has unrecognised weekday token `{token}`")]
     BadWeekday { id: BlockId, token: String },
+    #[error("block `{id}` has invalid `when` condition `{value}`")]
+    BadWhen { id: BlockId, value: String },
 }
 
 impl ValidationError {
@@ -241,7 +243,8 @@ impl ValidationError {
             | Self::EmptyRun { .. }
             | Self::MissingAnchor { .. }
             | Self::BothCountAndUntil { .. }
-            | Self::BadWeekday { .. } => 2,
+            | Self::BadWeekday { .. }
+            | Self::BadWhen { .. } => 2,
         }
     }
 }
@@ -348,6 +351,70 @@ pub enum Approval {
     Approved,
 }
 
+/// Reactive condition that the opt-in `serve` daemon can poll for a block.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum WhenCondition {
+    FileExists(String),
+    FileChanged(String),
+    CommandOk(Vec<String>),
+}
+
+impl WhenCondition {
+    fn parse_parenthesized<'a>(value: &'a str, name: &str) -> Option<&'a str> {
+        let rest = value.strip_prefix(name)?;
+        let body = rest.strip_prefix('(')?.strip_suffix(')')?;
+        Some(body.trim())
+    }
+}
+
+impl fmt::Display for WhenCondition {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::FileExists(path) => write!(formatter, "file_exists({path})"),
+            Self::FileChanged(path) => write!(formatter, "file_changed({path})"),
+            Self::CommandOk(argv) => write!(formatter, "command_ok({})", argv.join(" ")),
+        }
+    }
+}
+
+impl FromStr for WhenCondition {
+    type Err = FieldParseError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if let Some(path) = Self::parse_parenthesized(value, "file_exists") {
+            if path.is_empty() {
+                return Err(FieldParseError::WhenCondition {
+                    value: value.to_owned(),
+                });
+            }
+            return Ok(Self::FileExists(path.to_owned()));
+        }
+        if let Some(path) = Self::parse_parenthesized(value, "file_changed") {
+            if path.is_empty() {
+                return Err(FieldParseError::WhenCondition {
+                    value: value.to_owned(),
+                });
+            }
+            return Ok(Self::FileChanged(path.to_owned()));
+        }
+        if let Some(raw_argv) = Self::parse_parenthesized(value, "command_ok") {
+            let argv = raw_argv
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            if argv.is_empty() {
+                return Err(FieldParseError::WhenCondition {
+                    value: value.to_owned(),
+                });
+            }
+            return Ok(Self::CommandOk(argv));
+        }
+        Err(FieldParseError::WhenCondition {
+            value: value.to_owned(),
+        })
+    }
+}
+
 /// Wire-format retry (backoff as a string).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -375,6 +442,7 @@ pub struct Block {
     pub retry: Option<Retry>,
     pub expect_by: Option<DurationSpec>,
     pub approval: Option<Approval>,
+    pub when: Option<WhenCondition>,
     pub agent: Option<String>,
 }
 
@@ -487,6 +555,17 @@ impl Block {
         } else {
             raw.approval
         };
+        let when = raw
+            .when
+            .map(|value| {
+                value
+                    .parse::<WhenCondition>()
+                    .map_err(|_| ValidationError::BadWhen {
+                        id: raw.id.clone(),
+                        value,
+                    })
+            })
+            .transpose()?;
 
         Ok(Self {
             id: raw.id,
@@ -506,6 +585,7 @@ impl Block {
             retry,
             expect_by: raw.expect_by,
             approval,
+            when,
             agent: raw.agent,
         })
     }
@@ -595,6 +675,8 @@ struct RawBlock {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     approval: Option<Approval>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    when: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     agent: Option<String>,
 }
 
@@ -645,6 +727,7 @@ impl From<&Block> for RawBlock {
             retry,
             expect_by: block.expect_by,
             approval: block.approval,
+            when: block.when.as_ref().map(ToString::to_string),
             agent: block.agent.clone(),
         }
     }
@@ -1288,6 +1371,8 @@ pub enum FieldParseError {
     Run,
     #[error("invalid recurrence rule `{value}`")]
     RecurRule { value: String },
+    #[error("invalid `when` condition `{value}`")]
+    WhenCondition { value: String },
 }
 
 #[cfg(test)]
@@ -1542,6 +1627,81 @@ approval = "approved"
         assert_eq!(plan2.blocks[0].approval, plan.blocks[0].approval);
     }
 
+    #[test]
+    fn when_condition_parses_and_displays_variants() {
+        assert_eq!(
+            "file_exists(/tmp/ready)".parse::<WhenCondition>().unwrap(),
+            WhenCondition::FileExists("/tmp/ready".to_owned())
+        );
+        assert_eq!(
+            "file_changed(/tmp/input.txt)"
+                .parse::<WhenCondition>()
+                .unwrap()
+                .to_string(),
+            "file_changed(/tmp/input.txt)"
+        );
+        assert_eq!(
+            "command_ok(/bin/true --flag)"
+                .parse::<WhenCondition>()
+                .unwrap()
+                .to_string(),
+            "command_ok(/bin/true --flag)"
+        );
+        assert_eq!(
+            "command_ok(/bin/true --flag)"
+                .parse::<WhenCondition>()
+                .unwrap(),
+            WhenCondition::CommandOk(vec!["/bin/true".to_owned(), "--flag".to_owned()])
+        );
+        assert!("file_exists()".parse::<WhenCondition>().is_err());
+        assert!("file_changed()".parse::<WhenCondition>().is_err());
+        assert!("command_ok()".parse::<WhenCondition>().is_err());
+        assert!("unknown(/tmp/x)".parse::<WhenCondition>().is_err());
+    }
+
+    #[test]
+    fn when_condition_round_trips_through_toml() {
+        let toml = r#"
+date = "2026-06-08"
+timezone = "UTC"
+
+[[block]]
+id = "react"
+title = "React"
+start = "09:00"
+duration = "30m"
+when = "file_exists(/tmp/ready)"
+"#;
+        let plan = Plan::from_toml(toml).unwrap();
+        assert_eq!(
+            plan.blocks[0].when,
+            Some(WhenCondition::FileExists("/tmp/ready".to_owned()))
+        );
+        let serialized = plan.to_toml().unwrap();
+        assert!(serialized.contains("when = \"file_exists(/tmp/ready)\""));
+        let plan2 = Plan::from_toml(&serialized).unwrap();
+        assert_eq!(plan2.blocks[0].when, plan.blocks[0].when);
+    }
+
+    #[test]
+    fn bad_when_condition_is_validation_error() {
+        let err = Plan::from_toml(
+            r#"
+date = "2026-06-08"
+timezone = "UTC"
+
+[[block]]
+id = "react"
+title = "React"
+start = "09:00"
+duration = "30m"
+when = "file_exists()"
+"#,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("invalid `when` condition"));
+    }
+
     // ── origin round-trip ────────────────────────────────────────────────
 
     #[test]
@@ -1662,6 +1822,7 @@ on_missed  = ["f"]
             retry: None,
             expect_by: None,
             approval: None,
+            when: None,
             agent: None,
         };
         let rev = block.schedule_rev();
@@ -1669,6 +1830,10 @@ on_missed  = ["f"]
         let mut with_approval = block.clone();
         with_approval.approval = Some(Approval::Approved);
         assert_eq!(with_approval.schedule_rev(), rev);
+
+        let mut with_when = block.clone();
+        with_when.when = Some(WhenCondition::FileExists("/tmp/ready".to_owned()));
+        assert_eq!(with_when.schedule_rev(), rev);
 
         let mut with_origin = block;
         with_origin.origin = Some(Origin {

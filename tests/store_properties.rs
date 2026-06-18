@@ -43,6 +43,7 @@ fn fired_key(id: &str) -> FiredEventKey {
         retry: None,
         expect_by: None,
         approval: None,
+        when: None,
         agent: None,
     };
 

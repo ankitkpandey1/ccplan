@@ -10,7 +10,7 @@ use ccplan::{
     lifecycle::{EndBehavior, LifecyclePolicy},
     model::{
         Approval, Block, BlockId, ClockTime, DurationSpec, Lead, Plan, PlanDate, Retry, Run, Span,
-        Status, TimeZoneName,
+        Status, TimeZoneName, WhenCondition,
     },
     run_with_context,
     store::{HistoryPolicy, Store, StoreError, TriggerKind, TriggerRecord},
@@ -53,6 +53,63 @@ fn watch_renders_a_frame_then_quits_on_eof() {
 
     assert!(output.contains("ccplan watch ·"), "watch frame: {output}");
     assert!(output.contains("Focus time"), "watch frame: {output}");
+}
+
+#[test]
+fn serve_once_reports_missing_plan_without_hanging() {
+    let (_temp, context) = test_context_at("2026-06-08T10:00:45+05:30[Asia/Kolkata]");
+
+    let output = String::from_utf8(run_ok(&context, ["ccplan", "serve", "--once"])).unwrap();
+
+    assert!(output.contains("serve: no plan for 2026-06-08"), "{output}");
+}
+
+#[test]
+fn serve_once_reports_idle_when_no_reactive_conditions_fire() {
+    let (_temp, context) = test_context_at("2026-06-08T10:00:45+05:30[Asia/Kolkata]");
+    context
+        .store
+        .set_plan(&plan(), HistoryPolicy::Preserve)
+        .unwrap();
+
+    let output = String::from_utf8(run_ok(&context, ["ccplan", "serve", "--once"])).unwrap();
+
+    assert!(output.contains("serve: no reactive triggers"), "{output}");
+}
+
+#[test]
+fn serve_once_arms_satisfied_file_exists_condition() {
+    let (temp, context) = test_context_at("2026-06-08T10:00:45+05:30[Asia/Kolkata]");
+    let ready = temp.path().join("ready.flag");
+    std::fs::write(&ready, "ready").unwrap();
+    let mut reactive_plan = plan();
+    reactive_plan.blocks[0].when = Some(WhenCondition::FileExists(
+        ready.to_string_lossy().into_owned(),
+    ));
+    context
+        .store
+        .set_plan(&reactive_plan, HistoryPolicy::Preserve)
+        .unwrap();
+
+    let output = String::from_utf8(run_ok(&context, ["ccplan", "serve", "--once"])).unwrap();
+
+    assert!(output.contains("serve: armed reactive focus"), "{output}");
+    let stored = context
+        .store
+        .load_plan(&date())
+        .unwrap()
+        .expect("reactive plan remains stored");
+    assert_eq!(
+        stored.blocks[0].start,
+        "10:01".parse::<ClockTime>().unwrap()
+    );
+    let triggers = context.scheduler.triggers();
+    assert!(
+        triggers.iter().any(|trigger| {
+            trigger.block_id.as_str() == "focus" && trigger.kind == TriggerKind::Fire
+        }),
+        "reactive start trigger should be scheduled: {triggers:?}"
+    );
 }
 
 #[test]
@@ -1838,6 +1895,7 @@ fn block_with(id: &str, title: &str, start: &str, span: Span) -> Block {
         retry: None,
         expect_by: None,
         approval: None,
+        when: None,
         agent: None,
     }
 }

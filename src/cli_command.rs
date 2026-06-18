@@ -24,6 +24,7 @@ pub(crate) fn command() -> Command {
         .subcommand(read_command("next"))
         .subcommand(read_command("agenda"))
         .subcommand(watch_command())
+        .subcommand(serve_command())
         .subcommand(apply_command())
         .subcommand(diff_command())
         .subcommand(approve_command())
@@ -109,6 +110,13 @@ fn watch_command() -> Command {
     Command::new("watch")
         .arg(date_arg())
         .arg(Arg::new("every").long("every").default_value("30s"))
+}
+
+fn serve_command() -> Command {
+    Command::new("serve")
+        .arg(date_arg())
+        .arg(Arg::new("every").long("every").default_value("30s"))
+        .arg(flag("once", "once"))
 }
 
 fn apply_command() -> Command {

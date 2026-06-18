@@ -450,6 +450,7 @@ mod tests {
                 retry: None,
                 expect_by: None,
                 approval: None,
+                when: None,
                 agent: None,
             }],
         }

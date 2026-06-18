@@ -16,8 +16,8 @@ use serde::Serialize;
 use crate::{
     cli::{
         AddArgs, AgendaArgs, ApplyArgs, ApproveArgs, ClearArgs, Cli, Commands, DiffArgs, EditArgs,
-        FireArgs, LogArgs, MaterializeArgs, ReadArgs, RemindArgs, SetArgs, Shell, SnoozeArgs,
-        TemplateApplyArgs, TemplateArgs, TemplateCommand, TemplateNameArgs, WatchArgs,
+        FireArgs, LogArgs, MaterializeArgs, ReadArgs, RemindArgs, ServeArgs, SetArgs, Shell,
+        SnoozeArgs, TemplateApplyArgs, TemplateArgs, TemplateCommand, TemplateNameArgs, WatchArgs,
     },
     config::AutomationConfig,
     context::{ContextRefs, Notification, Scheduler},
@@ -25,8 +25,9 @@ use crate::{
     lifecycle::{Event, FireDecision, awaiting_approval, decide_fire, reconcile_overdue},
     model::{
         Approval, Block, BlockId, ClockTime, DurationSpec, Lead, Plan, PlanDate, Run, ScheduleRev,
-        Span, Status, TimeZoneName,
+        Span, Status, TimeZoneName, WhenCondition,
     },
+    serve::{ConditionState, ServeMemory, decide_reactive_triggers},
     store::{
         FireRecord, FiredEventKey, FiredStatus, HistoryPolicy, Store, TriggerKind, TriggerRecord,
     },
@@ -54,6 +55,7 @@ pub fn dispatch(
         Some(Commands::Next(args)) => next(args, out, context),
         Some(Commands::Agenda(args)) => agenda(args, out, context),
         Some(Commands::Watch(args)) => watch(args, out, context),
+        Some(Commands::Serve(args)) => serve(args, out, context),
         Some(Commands::Apply(args)) => apply(args, out, context),
         Some(Commands::Diff(args)) => diff(args, out, context),
         Some(Commands::Approve(args)) => approve(args, out, context),
@@ -131,6 +133,7 @@ fn add(args: AddArgs, context: &ContextRefs<'_>) -> Result<()> {
         retry: None,
         expect_by: None,
         approval,
+        when: None,
         agent: None,
     };
 
@@ -205,6 +208,7 @@ fn remind(args: RemindArgs, out: &mut dyn Write, context: &ContextRefs<'_>) -> R
         retry: None,
         expect_by: None,
         approval: None,
+        when: None,
         agent: None,
     };
 
@@ -667,6 +671,130 @@ fn watch(args: WatchArgs, out: &mut dyn Write, context: &ContextRefs<'_>) -> Res
     let interval = std::time::Duration::from_secs(u64::from(args.every.as_seconds()));
     let mut clock = RealWatchClock::spawn(interval);
     watch_loop(args.date, out, context, &mut clock)
+}
+
+trait ConditionProbe {
+    fn state(&self, condition: &WhenCondition) -> Result<ConditionState>;
+}
+
+struct RealConditionProbe<'a> {
+    automation: &'a AutomationConfig,
+}
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+impl ConditionProbe for RealConditionProbe<'_> {
+    fn state(&self, condition: &WhenCondition) -> Result<ConditionState> {
+        match condition {
+            WhenCondition::FileExists(path) => {
+                if Path::new(path).exists() {
+                    Ok(ConditionState::satisfied("exists"))
+                } else {
+                    Ok(ConditionState::unsatisfied())
+                }
+            }
+            WhenCondition::FileChanged(path) => match fs::metadata(path).and_then(|m| m.modified())
+            {
+                Ok(modified) => {
+                    let marker = modified
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default();
+                    Ok(ConditionState::satisfied(format!(
+                        "mtime:{}:{}",
+                        marker.as_secs(),
+                        marker.subsec_nanos()
+                    )))
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    Ok(ConditionState::unsatisfied())
+                }
+                Err(error) => Err(error.into()),
+            },
+            WhenCondition::CommandOk(argv) => {
+                authorize_run(self.automation, argv).map_err(Error::AutomationRefused)?;
+                let status = std::process::Command::new(&argv[0])
+                    .args(&argv[1..])
+                    .status()?;
+                if status.success() {
+                    Ok(ConditionState::satisfied("ok"))
+                } else {
+                    Ok(ConditionState::unsatisfied())
+                }
+            }
+        }
+    }
+}
+
+fn collect_condition_states(
+    plan: &Plan,
+    probe: &dyn ConditionProbe,
+) -> Result<HashMap<BlockId, ConditionState>> {
+    let mut states = HashMap::new();
+    for block in &plan.blocks {
+        if let Some(condition) = &block.when {
+            states.insert(block.id.clone(), probe.state(condition)?);
+        }
+    }
+    Ok(states)
+}
+
+fn serve_tick(
+    date: Option<PlanDate>,
+    out: &mut dyn Write,
+    context: &ContextRefs<'_>,
+    probe: &dyn ConditionProbe,
+    memory: &ServeMemory,
+) -> Result<ServeMemory> {
+    let date = date.unwrap_or_else(|| today(context));
+    let Some(mut plan) = context
+        .store
+        .load_plan_with_default(&date, context.config.notify.default_lead)?
+    else {
+        writeln!(out, "serve: no plan for {date}")?;
+        return Ok(memory.clone());
+    };
+    apply_overdue_in_memory(context, &mut plan)?;
+    let states = collect_condition_states(&plan, probe)?;
+    let tick = decide_reactive_triggers(&plan, &states, memory);
+    let now = context.clock.now().timestamp();
+    for decision in &tick.decisions {
+        arm_successor(context, out, &plan, &decision.block_id, now)?;
+        writeln!(out, "serve: armed reactive {}", decision.block_id)?;
+    }
+    if tick.decisions.is_empty() {
+        writeln!(out, "serve: no reactive triggers")?;
+    }
+    Ok(tick.next_memory)
+}
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn serve_loop(
+    args: &ServeArgs,
+    out: &mut dyn Write,
+    context: &ContextRefs<'_>,
+    probe: &dyn ConditionProbe,
+    mut memory: ServeMemory,
+) -> Result<()> {
+    let interval = std::time::Duration::from_secs(u64::from(args.every.as_seconds()));
+    loop {
+        memory = serve_tick(args.date.clone(), out, context, probe, &memory)?;
+        out.flush()?;
+        std::thread::sleep(interval);
+    }
+}
+
+/// Runs the optional resident daemon. Default ccplan remains daemonless unless this is invoked.
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn serve(args: ServeArgs, out: &mut dyn Write, context: &ContextRefs<'_>) -> Result<()> {
+    let probe = RealConditionProbe {
+        automation: &context.config.automation,
+    };
+    let memory = ServeMemory::default();
+    if args.once {
+        let _ = serve_tick(args.date, out, context, &probe, &memory)?;
+        Ok(())
+    } else {
+        serve_loop(&args, out, context, &probe, memory)
+    }
 }
 
 /// Reads the fire ledger — what the scheduler actually did — newest filters applied.

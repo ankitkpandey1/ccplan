@@ -350,6 +350,7 @@ fn block_with_id(id: &str, status: Status, start: &str, span: Span) -> Block {
         retry: None,
         expect_by: None,
         approval: None,
+        when: None,
         agent: None,
     }
 }

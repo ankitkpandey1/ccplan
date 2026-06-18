@@ -36,6 +36,7 @@ pub enum Commands {
     Next(ReadArgs),
     Agenda(AgendaArgs),
     Watch(WatchArgs),
+    Serve(ServeArgs),
     Apply(ApplyArgs),
     Diff(DiffArgs),
     Approve(ApproveArgs),
@@ -168,6 +169,19 @@ pub struct WatchArgs {
     /// Refresh interval, e.g. `30s`, `1m`, `5m` (default `30s`, max 24h).
     #[arg(long = "every", default_value = "30s")]
     pub every: DurationSpec,
+}
+
+/// `serve` runs the optional resident daemon for reactive local automations.
+#[derive(Debug, Args)]
+pub struct ServeArgs {
+    #[arg(long)]
+    pub date: Option<PlanDate>,
+    /// Poll interval, e.g. `30s`, `1m`, `5m` (default `30s`, max 24h).
+    #[arg(long = "every", default_value = "30s")]
+    pub every: DurationSpec,
+    /// Run one polling tick and exit. Useful for tests and supervised invocations.
+    #[arg(long)]
+    pub once: bool,
 }
 
 #[derive(Debug, Args)]

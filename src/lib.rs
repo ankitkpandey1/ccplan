@@ -19,6 +19,7 @@ pub mod mcp;
 pub mod model;
 mod platform;
 pub(crate) mod recurrence;
+pub(crate) mod serve;
 pub mod store;
 pub mod time;
 

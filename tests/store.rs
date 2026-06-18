@@ -517,6 +517,7 @@ fn block(id: &str, status: Status) -> Block {
         retry: None,
         expect_by: None,
         approval: Some(ccplan::model::Approval::Pending),
+        when: None,
         agent: None,
     }
 }
@@ -587,6 +588,7 @@ fn recurring_block(id: &str) -> Block {
         retry: None,
         expect_by: None,
         approval: None,
+        when: None,
         agent: None,
     }
 }
@@ -733,6 +735,7 @@ fn materialize_returns_collision_error_for_hand_authored_id_matching_rule() {
         retry: None,
         expect_by: None,
         approval: None,
+        when: None,
         agent: None,
     };
     let hand_plan = Plan {
