@@ -269,7 +269,7 @@ function blockCard(card, actionable) {
         )
       );
       actions.appendChild(
-        iconBtn("⏰", "", "Snooze 10m", () =>
+        iconBtn("☾", "", "Snooze 10m", () =>
           refresh(() => invoke("snooze_block", { id: card.id, by: "10m", date: state.date }))
         )
       );
