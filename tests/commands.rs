@@ -9,8 +9,8 @@ use ccplan::{
     error::Error,
     lifecycle::{EndBehavior, Event, LifecyclePolicy},
     model::{
-        Approval, Block, BlockId, ClockTime, DurationSpec, Lead, Plan, PlanDate, Retry, Run, Span,
-        Status, TimeZoneName, WhenCondition,
+        Approval, Block, BlockId, ClockTime, DurationSpec, Lead, Plan, PlanDate, RecurEnd,
+        RecurRule, Retry, Run, Span, Status, TimeZoneName, WhenCondition,
     },
     run_with_context,
     store::{FiredEventKey, HistoryPolicy, Store, StoreError, TriggerKind, TriggerRecord},
@@ -559,6 +559,227 @@ fn add_edit_and_status_errors_cover_conflict_paths() {
         let err = run_err(&empty_context, command);
         assert_eq!(err.exit_code(), 3);
     }
+}
+
+#[test]
+fn add_accepts_recurrence_dependency_retry_and_dead_man_flags() {
+    let (_temp, context) = test_context_at("2026-06-08T10:00:00+05:30[Asia/Kolkata]");
+
+    run_ok(
+        &context,
+        [
+            "ccplan",
+            "add",
+            "--id",
+            "focus",
+            "--title",
+            "Focus",
+            "--start",
+            "09:00",
+            "--duration",
+            "30m",
+        ],
+    );
+    run_ok(
+        &context,
+        [
+            "ccplan",
+            "add",
+            "--id",
+            "backup",
+            "--title",
+            "Backup",
+            "--start",
+            "10:00",
+            "--duration",
+            "15m",
+            "--every",
+            "weekday",
+            "--until",
+            "2026-06-30",
+            "--after",
+            "focus",
+            "--retry",
+            "3:30s",
+            "--expect-by",
+            "24h",
+        ],
+    );
+    run_ok(
+        &context,
+        [
+            "ccplan",
+            "add",
+            "--id",
+            "daily-count",
+            "--title",
+            "Daily Count",
+            "--start",
+            "11:00",
+            "--duration",
+            "15m",
+            "--every",
+            "daily",
+            "--count",
+            "2",
+        ],
+    );
+    run_ok(
+        &context,
+        [
+            "ccplan",
+            "add",
+            "--id",
+            "open-daily",
+            "--title",
+            "Open Daily",
+            "--start",
+            "12:00",
+            "--duration",
+            "15m",
+            "--every",
+            "daily",
+        ],
+    );
+
+    let stored = context.store.load_plan(&date()).unwrap().unwrap();
+    let backup = stored
+        .blocks
+        .iter()
+        .find(|block| block.id.as_str() == "backup")
+        .unwrap();
+    let recurrence = backup.recurrence.as_ref().unwrap();
+    assert_eq!(recurrence.rule, RecurRule::Weekday);
+    assert_eq!(recurrence.anchor, date());
+    assert_eq!(
+        recurrence.end,
+        Some(RecurEnd::Until("2026-06-30".parse::<PlanDate>().unwrap()))
+    );
+    assert_eq!(backup.after, vec!["focus".parse::<BlockId>().unwrap()]);
+    let retry = backup.retry.as_ref().unwrap();
+    assert_eq!(retry.count, 3);
+    assert_eq!(retry.backoff, DurationSpec::from_seconds(30).unwrap());
+    assert_eq!(
+        backup.expect_by,
+        Some(DurationSpec::from_seconds(24 * 60 * 60).unwrap())
+    );
+    let daily_count = stored
+        .blocks
+        .iter()
+        .find(|block| block.id.as_str() == "daily-count")
+        .unwrap();
+    assert_eq!(
+        daily_count.recurrence.as_ref().unwrap().end,
+        Some(RecurEnd::Count(2))
+    );
+    let open_daily = stored
+        .blocks
+        .iter()
+        .find(|block| block.id.as_str() == "open-daily")
+        .unwrap();
+    assert_eq!(open_daily.recurrence.as_ref().unwrap().end, None);
+}
+
+#[test]
+fn add_rejects_invalid_orchestration_flag_combinations() {
+    let (_temp, context) = test_context_at("2026-06-08T10:00:00+05:30[Asia/Kolkata]");
+
+    let until_without_every = run_err(
+        &context,
+        [
+            "ccplan",
+            "add",
+            "--title",
+            "Bad",
+            "--start",
+            "09:00",
+            "--duration",
+            "30m",
+            "--until",
+            "2026-06-30",
+        ],
+    );
+    assert!(
+        matches!(until_without_every, Error::Usage(message) if message.contains("require `--every`"))
+    );
+
+    let both_end_shapes = run_err(
+        &context,
+        [
+            "ccplan",
+            "add",
+            "--title",
+            "Bad",
+            "--start",
+            "09:00",
+            "--duration",
+            "30m",
+            "--every",
+            "daily",
+            "--until",
+            "2026-06-30",
+            "--count",
+            "2",
+        ],
+    );
+    assert!(
+        matches!(both_end_shapes, Error::Usage(message) if message.contains("mutually exclusive"))
+    );
+
+    let bad_retry_shape = run_err(
+        &context,
+        [
+            "ccplan",
+            "add",
+            "--title",
+            "Bad",
+            "--start",
+            "09:00",
+            "--duration",
+            "30m",
+            "--retry",
+            "3",
+        ],
+    );
+    assert!(matches!(bad_retry_shape, Error::Usage(message) if message.contains("COUNT:BACKOFF")));
+
+    let empty_retry_backoff = run_err(
+        &context,
+        [
+            "ccplan",
+            "add",
+            "--title",
+            "Bad",
+            "--start",
+            "09:00",
+            "--duration",
+            "30m",
+            "--retry",
+            "3:",
+        ],
+    );
+    assert!(
+        matches!(empty_retry_backoff, Error::Usage(message) if message.contains("COUNT:BACKOFF"))
+    );
+
+    let bad_retry_count = run_err(
+        &context,
+        [
+            "ccplan",
+            "add",
+            "--title",
+            "Bad",
+            "--start",
+            "09:00",
+            "--duration",
+            "30m",
+            "--retry",
+            "many:30s",
+        ],
+    );
+    assert!(
+        matches!(bad_retry_count, Error::Usage(message) if message.contains("unsigned integer"))
+    );
 }
 
 #[test]

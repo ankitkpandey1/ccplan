@@ -82,6 +82,19 @@ pub struct AddArgs {
     pub tags: Vec<String>,
     #[arg(long, num_args = 1.., value_name = "ARGV")]
     pub run: Vec<String>,
+    #[arg(long)]
+    pub every: Option<String>,
+    #[arg(long)]
+    pub until: Option<PlanDate>,
+    #[arg(long)]
+    pub count: Option<u32>,
+    #[arg(long, value_delimiter = ',')]
+    pub after: Vec<BlockId>,
+    /// Retry policy as COUNT:BACKOFF, e.g. `3:30s`.
+    #[arg(long)]
+    pub retry: Option<String>,
+    #[arg(long = "expect-by")]
+    pub expect_by: Option<DurationSpec>,
 }
 
 #[derive(Debug, Args)]

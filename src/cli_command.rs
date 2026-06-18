@@ -62,6 +62,12 @@ fn add_command() -> Command {
         .arg(Arg::new("notify").long("notify"))
         .arg(Arg::new("tags").long("tags").value_delimiter(','))
         .arg(Arg::new("run").long("run").value_name("ARGV").num_args(1..))
+        .arg(Arg::new("every").long("every"))
+        .arg(Arg::new("until").long("until").value_name(DATE))
+        .arg(Arg::new("count").long("count"))
+        .arg(Arg::new("after").long("after").value_delimiter(','))
+        .arg(Arg::new("retry").long("retry").value_name("COUNT:BACKOFF"))
+        .arg(Arg::new("expect_by").long("expect-by"))
 }
 
 fn remind_command() -> Command {

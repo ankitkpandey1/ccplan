@@ -9,14 +9,16 @@
 use std::io::{BufRead, Write};
 
 use jiff::{SignedDuration, Timestamp};
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use std::path::PathBuf;
 
 use crate::{
     cli::{
-        AddArgs, AgendaArgs, ApplyArgs, BlockTarget, Commands, EditArgs, LogArgs, ReadArgs,
-        RemindArgs, SnoozeArgs, TemplateApplyArgs, TemplateArgs, TemplateCommand, TemplateNameArgs,
+        AgendaArgs, ApplyArgs, ApproveArgs, BlockTarget, Commands, DiffArgs, EditArgs, LogArgs,
+        MaterializeArgs, ReadArgs, RemindArgs, SnoozeArgs, TemplateApplyArgs, TemplateArgs,
+        TemplateCommand, TemplateNameArgs,
     },
     commands::{self, set_from_str, slug_block_id},
     config::{AutomationConfig, Config},
@@ -24,10 +26,10 @@ use crate::{
     error::{Error, Result},
     lifecycle::{EndBehavior, LifecyclePolicy},
     model::{
-        Block, BlockId, ClockTime, DurationSpec, Lead, Plan, PlanDate, Run, Span, Status,
-        TimeZoneName,
+        Approval, Block, BlockId, ClockTime, DurationSpec, Lead, Plan, PlanDate, RecurEnd,
+        Recurrence, Retry, Run, Span, Status, TimeZoneName, WhenCondition,
     },
-    store::StoreError,
+    store::{HistoryPolicy, StoreError},
 };
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -225,6 +227,9 @@ fn call_tool(name: &str, args: &Value, context: &ContextRefs<'_>) -> Value {
         "ccplan_list_templates" => invoke_list_templates(args, context),
         "ccplan_apply_template" => invoke_apply_template(args, context),
         "ccplan_fire_log" => invoke_fire_log(args, context),
+        "ccplan_materialize" => invoke_materialize(args, context),
+        "ccplan_approve" => invoke_approve(args, context),
+        "ccplan_diff" => invoke_diff(args, context),
         _ => tool_error(&json!({
             "error": "unknown_tool",
             "message": format!("unknown tool: {name}"),
@@ -266,9 +271,15 @@ fn plan_day_inner(args: &Value, context: &ContextRefs<'_>) -> Result<String> {
         .and_then(Value::as_array)
         .ok_or_else(|| Error::Usage("plan_day requires a 'blocks' array".to_owned()))?;
 
+    let plan_date = date.unwrap_or_else(|| PlanDate::from_jiff_date(context.clock.now().date()));
     let mut blocks = Vec::new();
     for (i, bv) in blocks_json.iter().enumerate() {
-        blocks.push(parse_mcp_block(bv, i, context.config.notify.default_lead)?);
+        blocks.push(parse_mcp_block(
+            bv,
+            i,
+            context.config.notify.default_lead,
+            &plan_date,
+        )?);
     }
 
     // Collect run argvs before blocks is moved into Plan.
@@ -277,7 +288,6 @@ fn plan_day_inner(args: &Value, context: &ContextRefs<'_>) -> Result<String> {
         .filter_map(|b| b.run.as_ref().map(|r| r.as_slice().to_vec()))
         .collect();
 
-    let plan_date = date.unwrap_or_else(|| PlanDate::from_jiff_date(context.clock.now().date()));
     let plan = Plan {
         date: plan_date,
         timezone,
@@ -308,6 +318,34 @@ fn invoke_apply(args: &Value, context: &ContextRefs<'_>) -> Value {
         Ok(()) => tool_ok(&String::from_utf8_lossy(&out)),
         Err(e) => tool_error_from_err(&e),
     }
+}
+
+fn invoke_materialize(args: &Value, context: &ContextRefs<'_>) -> Value {
+    let horizon = match parse_u32_arg(args, "horizon", 14) {
+        Ok(horizon) => horizon,
+        Err(error) => return tool_error_from_err(&error),
+    };
+    let cmd = Commands::Materialize(MaterializeArgs { horizon });
+    invoke_text_cmd(cmd, context)
+}
+
+fn invoke_approve(args: &Value, context: &ContextRefs<'_>) -> Value {
+    let id = match required_block_id_arg(args, "approve", "id") {
+        Ok(id) => id,
+        Err(error) => return tool_error_from_err(&error),
+    };
+    let cmd = Commands::Approve(ApproveArgs {
+        id,
+        date: extract_date(args),
+    });
+    invoke_text_cmd(cmd, context)
+}
+
+fn invoke_diff(args: &Value, context: &ContextRefs<'_>) -> Value {
+    let cmd = Commands::Diff(DiffArgs {
+        date: extract_date(args),
+    });
+    invoke_text_cmd(cmd, context)
 }
 
 fn invoke_show_plan(args: &Value, context: &ContextRefs<'_>) -> Value {
@@ -441,6 +479,14 @@ fn invoke_read_cmd(cmd: Commands, context: &ContextRefs<'_>) -> Value {
     }
 }
 
+fn invoke_text_cmd(cmd: Commands, context: &ContextRefs<'_>) -> Value {
+    let mut out = Vec::new();
+    match commands::dispatch(Some(cmd), &mut out, context) {
+        Ok(()) => tool_ok(&String::from_utf8_lossy(&out)),
+        Err(e) => tool_error_from_err(&e),
+    }
+}
+
 fn invoke_add_block(args: &Value, context: &ContextRefs<'_>) -> Value {
     match add_block_inner(args, context) {
         Ok(text) => tool_ok(&text),
@@ -448,104 +494,52 @@ fn invoke_add_block(args: &Value, context: &ContextRefs<'_>) -> Value {
     }
 }
 
+fn save_mcp_plan(context: &ContextRefs<'_>, plan: &Plan) -> Result<()> {
+    let lead = context.config.notify.default_lead;
+    context
+        .store
+        .set_plan_with_default(plan, HistoryPolicy::Preserve, lead)?;
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)]
 fn add_block_inner(args: &Value, context: &ContextRefs<'_>) -> Result<String> {
-    let title = args
-        .get("title")
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::Usage("add_block requires 'title'".to_owned()))?
-        .to_owned();
-    let start: ClockTime = args
-        .get("start")
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::Usage("add_block requires 'start'".to_owned()))?
-        .parse()
-        .map_err(Error::from)?;
-    let end: Option<ClockTime> = args
-        .get("end")
-        .and_then(Value::as_str)
-        .map(|s| s.parse().map_err(Error::from))
-        .transpose()?;
-    let duration: Option<DurationSpec> = args
-        .get("duration")
-        .and_then(Value::as_str)
-        .map(|s| s.parse().map_err(Error::from))
-        .transpose()?;
-    match (&end, &duration) {
-        (Some(_), Some(_)) => {
-            return Err(Error::Usage(
-                "add_block: set exactly one of 'end' or 'duration'".to_owned(),
-            ));
-        }
-        (None, None) => {
-            return Err(Error::Usage(
-                "add_block: set 'end' or 'duration'".to_owned(),
-            ));
-        }
-        _ => {}
-    }
-    let notify: Option<Lead> = args
-        .get("notify")
-        .and_then(Value::as_str)
-        .map(|s| s.parse().map_err(Error::from))
-        .transpose()?;
-    let id: Option<BlockId> = args
-        .get("id")
-        .and_then(Value::as_str)
-        .map(|s| s.parse().map_err(Error::from))
-        .transpose()?;
-    let tags: Vec<String> = args
-        .get("tags")
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default();
-    let run: Vec<String> = args
-        .get("run")
-        .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default();
     let date = extract_date(args);
     let apply = args.get("apply").and_then(Value::as_bool).unwrap_or(false);
-    let run_copy = run.clone();
-    let add_args = AddArgs {
-        date: date.clone(),
-        id,
-        title,
-        start,
-        end,
-        duration,
-        notify,
-        tags,
-        run,
+    let plan_date = date.unwrap_or_else(|| PlanDate::from_jiff_date(context.clock.now().date()));
+    let block = parse_mcp_block(args, 0, context.config.notify.default_lead, &plan_date)?;
+    let id = block.id.clone();
+    let run_copy = block.run.as_ref().map(|run| run.as_slice().to_vec());
+
+    let stored = match context.store.load_plan(&plan_date)? {
+        Some(plan) => plan,
+        None => Plan {
+            date: plan_date.clone(),
+            timezone: timezone_from_context(context),
+            blocks: Vec::new(),
+        },
     };
+    let mut plan = stored;
+    match plan.blocks.iter().position(|existing| existing.id == id) {
+        Some(index) if plan.blocks[index].status.is_terminal() => {
+            return Err(Error::HistoryConflict { id });
+        }
+        Some(index) => plan.blocks[index] = block,
+        None => plan.blocks.push(block),
+    }
+    save_mcp_plan(context, &plan)?;
+
     let mut out = Vec::new();
-    commands::dispatch(Some(Commands::Add(add_args)), &mut out, context)?;
+    writeln!(&mut out, "block added").expect("writing to Vec cannot fail");
     if apply {
         let apply_cmd = Some(Commands::Apply(ApplyArgs {
-            date,
+            date: Some(plan_date),
             dry_run: false,
         }));
         commands::dispatch(apply_cmd, &mut out, context)?;
     }
     let mut text = String::from_utf8_lossy(&out).into_owned();
-    if text.is_empty() {
-        "block added".clone_into(&mut text);
-    }
-    let run_refs: Vec<&[String]> = if run_copy.is_empty() {
-        vec![]
-    } else {
-        vec![&run_copy]
-    };
+    let run_refs: Vec<&[String]> = run_copy.as_deref().into_iter().collect();
     if let Some(warn) = run_authorization_warning(&context.config.automation, &run_refs) {
         text.push_str(&warn);
         text.push('\n');
@@ -832,7 +826,125 @@ fn timezone_from_context(context: &ContextRefs<'_>) -> TimeZoneName {
         .expect("IANA timezone names are always valid TimeZoneNames")
 }
 
-fn parse_mcp_block(val: &Value, index: usize, default_lead: Lead) -> Result<Block> {
+fn parse_u32_arg(args: &Value, field: &str, default: u32) -> Result<u32> {
+    let Some(value) = args.get(field) else {
+        return Ok(default);
+    };
+    let raw = value
+        .as_u64()
+        .ok_or_else(|| Error::Usage(format!("`{field}` must be an unsigned integer")))?;
+    u32::try_from(raw).map_err(|_| {
+        Error::Usage(format!(
+            "`{field}` is too large for a 32-bit unsigned integer"
+        ))
+    })
+}
+
+fn required_block_id_arg(args: &Value, tool: &str, field: &str) -> Result<BlockId> {
+    args.get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::Usage(format!("{tool} requires '{field}'")))?
+        .parse()
+        .map_err(Error::from)
+}
+
+fn parse_block_id_array(val: &Value, field: &str) -> Result<Vec<BlockId>> {
+    let Some(arr) = val.get(field).and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    arr.iter()
+        .filter_map(Value::as_str)
+        .map(|raw| raw.parse::<BlockId>().map_err(Error::from))
+        .collect()
+}
+
+fn parse_mcp_recurrence(val: &Value, default_anchor: &PlanDate) -> Result<Option<Recurrence>> {
+    let Some(every) = val.get("every").and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    let until: Option<PlanDate> = val
+        .get("until")
+        .and_then(Value::as_str)
+        .map(|raw| raw.parse().map_err(Error::from))
+        .transpose()?;
+    let count: Option<u32> = val
+        .get("count")
+        .and_then(Value::as_u64)
+        .map(|raw| u32::try_from(raw).map_err(|_| Error::Usage("`count` is too large".to_owned())))
+        .transpose()?;
+    if until.is_some() && count.is_some() {
+        return Err(Error::Usage(
+            "`until` and `count` are mutually exclusive".to_owned(),
+        ));
+    }
+    let anchor = val
+        .get("anchor")
+        .and_then(Value::as_str)
+        .map(|raw| raw.parse().map_err(Error::from))
+        .transpose()?
+        .unwrap_or_else(|| default_anchor.clone());
+    let rule = crate::recurrence::parse_every(every).map_err(Error::from)?;
+    let end = until
+        .map(RecurEnd::Until)
+        .or_else(|| count.map(RecurEnd::Count));
+    Ok(Some(Recurrence { rule, anchor, end }))
+}
+
+#[derive(Deserialize)]
+struct McpRetry {
+    count: u32,
+    backoff: String,
+}
+
+fn parse_mcp_retry(val: &Value) -> Result<Option<Retry>> {
+    let Some(raw) = val.get("retry") else {
+        return Ok(None);
+    };
+    let retry: McpRetry = serde_json::from_value(raw.clone()).map_err(|error| {
+        Error::Usage(format!(
+            "`retry` must be an object with count and backoff: {error}"
+        ))
+    })?;
+    let backoff = retry.backoff.parse::<DurationSpec>().map_err(Error::from)?;
+    Ok(Some(Retry {
+        count: retry.count,
+        backoff,
+    }))
+}
+
+fn parse_mcp_approval(val: &Value) -> Result<Option<Approval>> {
+    let Some(raw) = val.get("approval").and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    match raw {
+        "pending" => Ok(Some(Approval::Pending)),
+        "approved" => Ok(Some(Approval::Approved)),
+        other => Err(Error::Usage(format!(
+            "`approval` must be pending or approved, got `{other}`"
+        ))),
+    }
+}
+
+fn parse_mcp_when(val: &Value) -> Result<Option<WhenCondition>> {
+    val.get("when")
+        .and_then(Value::as_str)
+        .map(|raw| raw.parse::<WhenCondition>().map_err(Error::from))
+        .transpose()
+}
+
+fn parse_mcp_expect_by(val: &Value) -> Result<Option<DurationSpec>> {
+    val.get("expect_by")
+        .and_then(Value::as_str)
+        .map(|raw| raw.parse::<DurationSpec>().map_err(Error::from))
+        .transpose()
+}
+
+fn parse_mcp_block(
+    val: &Value,
+    index: usize,
+    default_lead: Lead,
+    default_anchor: &PlanDate,
+) -> Result<Block> {
     let title = val
         .get("title")
         .and_then(Value::as_str)
@@ -911,10 +1023,11 @@ fn parse_mcp_block(val: &Value, index: usize, default_lead: Lead) -> Result<Bloc
         }
     };
 
-    let approval = if run.is_some() {
-        Some(crate::model::Approval::Pending)
+    let parsed_approval = parse_mcp_approval(val)?;
+    let approval = if run.is_some() && parsed_approval.is_none() {
+        Some(Approval::Pending)
     } else {
-        None
+        parsed_approval
     };
     Ok(Block {
         id,
@@ -925,17 +1038,17 @@ fn parse_mcp_block(val: &Value, index: usize, default_lead: Lead) -> Result<Bloc
         tags,
         status: Status::Pending,
         run,
-        recurrence: None,
+        recurrence: parse_mcp_recurrence(val, default_anchor)?,
         origin: None,
-        after: vec![],
-        on_success: vec![],
-        on_failure: vec![],
-        on_missed: vec![],
-        retry: None,
-        expect_by: None,
+        after: parse_block_id_array(val, "after")?,
+        on_success: parse_block_id_array(val, "on_success")?,
+        on_failure: parse_block_id_array(val, "on_failure")?,
+        on_missed: parse_block_id_array(val, "on_missed")?,
+        retry: parse_mcp_retry(val)?,
+        expect_by: parse_mcp_expect_by(val)?,
         approval,
-        when: None,
-        agent: None,
+        when: parse_mcp_when(val)?,
+        agent: val.get("agent").and_then(Value::as_str).map(str::to_owned),
     })
 }
 
@@ -959,6 +1072,9 @@ fn tool_catalog() -> Vec<Value> {
         list_templates_schema(),
         apply_template_schema(),
         fire_log_schema(),
+        materialize_schema(),
+        approve_schema(),
+        diff_schema(),
     ]
 }
 
@@ -1012,7 +1128,20 @@ fn plan_day_schema() -> Value {
                                 "type": "array",
                                 "items": {"type": "string"},
                                 "description": "argv to execute at block start. argv[0] must be an absolute path. Requires automation enabled and argv[0] allowlisted in config."
-                            }
+                            },
+                            "every": {"type": "string", "description": "Recurrence rule: daily, weekday, weekend, weekly:mon,wed, Nd, or Nw."},
+                            "anchor": {"type": "string", "description": "Recurrence anchor date YYYY-MM-DD. Defaults to the plan date when every is set."},
+                            "until": {"type": "string", "description": "Last recurrence date YYYY-MM-DD. Mutually exclusive with count."},
+                            "count": {"type": "integer", "description": "Maximum number of occurrences. Mutually exclusive with until."},
+                            "after": {"type": "array", "items": {"type": "string"}, "description": "Dependency block IDs that must be done before this block arms."},
+                            "on_success": {"type": "array", "items": {"type": "string"}, "description": "Successor block IDs to arm after this block succeeds."},
+                            "on_failure": {"type": "array", "items": {"type": "string"}, "description": "Successor block IDs to arm after this block fails or is refused."},
+                            "on_missed": {"type": "array", "items": {"type": "string"}, "description": "Successor block IDs to arm after this block is missed."},
+                            "retry": {"type": "object", "properties": {"count": {"type": "integer"}, "backoff": {"type": "string"}}, "description": "Retry failed run commands with a fixed backoff."},
+                            "expect_by": {"type": "string", "description": "Dead-man window e.g. 25h; status reports when no success lands within it."},
+                            "approval": {"type": "string", "enum": ["pending", "approved"], "description": "Approval state for run blocks. Omitted run blocks default to pending."},
+                            "when": {"type": "string", "description": "Optional serve condition: file_exists(path), file_changed(path), or command_ok(argv)."},
+                            "agent": {"type": "string", "description": "Agent name that owns this block for ccplan serve --agent."}
                         },
                         "required": ["title", "start"]
                     }
@@ -1062,6 +1191,47 @@ fn fire_log_schema() -> Value {
                     "type": "string",
                     "description": "RFC 3339 instant (e.g. 2026-06-16T09:00:00Z). Only show fires at or after this time — e.g. what fired since you last looked."
                 }
+            }
+        }
+    })
+}
+
+fn materialize_schema() -> Value {
+    json!({
+        "name": "ccplan_materialize",
+        "description": "Expand recurring rules into concrete dated occurrences for a forward horizon, then apply each date. Defaults to 14 days.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "horizon": {"type": "integer", "description": "Number of days to materialize. Default 14."}
+            }
+        }
+    })
+}
+
+fn approve_schema() -> Value {
+    json!({
+        "name": "ccplan_approve",
+        "description": "Approve a run: block so it may execute when fired. Pending run blocks never execute.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "Block ID to approve."},
+                "date": {"type": "string", "description": "ISO date YYYY-MM-DD. Defaults to today."}
+            },
+            "required": ["id"]
+        }
+    })
+}
+
+fn diff_schema() -> Value {
+    json!({
+        "name": "ccplan_diff",
+        "description": "Preview scheduler changes for a date without mutating the OS scheduler.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "date": {"type": "string", "description": "ISO date YYYY-MM-DD. Defaults to today."}
             }
         }
     })
@@ -1142,6 +1312,19 @@ fn add_block_schema() -> Value {
                     "items": {"type": "string"},
                     "description": "argv to execute at block start. argv[0] must be absolute and allowlisted."
                 },
+                "every": {"type": "string", "description": "Recurrence rule: daily, weekday, weekend, weekly:mon,wed, Nd, or Nw."},
+                "anchor": {"type": "string", "description": "Recurrence anchor date YYYY-MM-DD. Defaults to the target date when every is set."},
+                "until": {"type": "string", "description": "Last recurrence date YYYY-MM-DD. Mutually exclusive with count."},
+                "count": {"type": "integer", "description": "Maximum number of occurrences. Mutually exclusive with until."},
+                "after": {"type": "array", "items": {"type": "string"}, "description": "Dependency block IDs that must be done before this block arms."},
+                "on_success": {"type": "array", "items": {"type": "string"}, "description": "Successor block IDs to arm after this block succeeds."},
+                "on_failure": {"type": "array", "items": {"type": "string"}, "description": "Successor block IDs to arm after this block fails or is refused."},
+                "on_missed": {"type": "array", "items": {"type": "string"}, "description": "Successor block IDs to arm after this block is missed."},
+                "retry": {"type": "object", "properties": {"count": {"type": "integer"}, "backoff": {"type": "string"}}, "description": "Retry failed run commands with a fixed backoff."},
+                "expect_by": {"type": "string", "description": "Dead-man window e.g. 25h; status reports when no success lands within it."},
+                "approval": {"type": "string", "enum": ["pending", "approved"], "description": "Approval state for run blocks. Omitted run blocks default to pending."},
+                "when": {"type": "string", "description": "Optional serve condition: file_exists(path), file_changed(path), or command_ok(argv)."},
+                "agent": {"type": "string", "description": "Agent name that owns this block for ccplan serve --agent."},
                 "apply": {
                     "type": "boolean",
                     "description": "If true, also run ccplan_apply after adding. Default false."
@@ -1295,8 +1478,8 @@ mod tests {
         context::{Context, RecordingNotifier, RecordingScheduler},
         error::Error,
         model::{
-            Block, BlockId, ClockTime, DurationSpec, Lead, Plan, PlanDate, Span, Status,
-            TimeZoneName,
+            Approval, Block, BlockId, ClockTime, DurationSpec, Lead, Plan, PlanDate, RecurEnd,
+            RecurRule, Span, Status, TimeZoneName, WhenCondition,
         },
         store::{HistoryPolicy, Store, StoreError},
         time::FixedClock,
@@ -1989,6 +2172,101 @@ mod tests {
         assert_eq!(responses[0]["result"]["isError"], false);
     }
 
+    #[test]
+    fn plan_day_accepts_orchestration_fields() {
+        let (_temp, context) = test_context();
+        let input = req(
+            1,
+            "tools/call",
+            json!({"name": "ccplan_plan_day", "arguments": {
+                "date": "2026-06-08",
+                "timezone": "Asia/Kolkata",
+                "blocks": [
+                    {
+                        "id": "seed",
+                        "title": "Seed",
+                        "start": "09:00",
+                        "end": "09:30",
+                        "every": "daily",
+                        "count": 2,
+                        "approval": "pending"
+                    },
+                    {
+                        "id": "notify",
+                        "title": "Notify",
+                        "start": "10:00",
+                        "duration": "30m",
+                        "run": ["/usr/bin/echo", "hi"],
+                        "approval": "approved",
+                        "every": "weekly:mon,wed",
+                        "anchor": "2026-06-01",
+                        "until": "2026-06-30",
+                        "after": ["seed"],
+                        "on_success": ["seed"],
+                        "on_failure": ["seed"],
+                        "on_missed": ["seed"],
+                        "retry": {"count": 2, "backoff": "30s"},
+                        "expect_by": "2h",
+                        "when": "file_exists(/tmp/ready)",
+                        "agent": "alpha"
+                    }
+                ]
+            }}),
+        );
+        let responses = run_serve(&context, input.as_bytes());
+        assert_eq!(responses[0]["result"]["isError"], false);
+        let stored = context
+            .store
+            .load_plan(&"2026-06-08".parse::<PlanDate>().unwrap())
+            .unwrap()
+            .unwrap();
+        let seed = stored
+            .blocks
+            .iter()
+            .find(|block| block.id.as_str() == "seed")
+            .unwrap();
+        assert_eq!(seed.approval, Some(Approval::Pending));
+        assert_eq!(
+            seed.recurrence.as_ref().unwrap().end,
+            Some(RecurEnd::Count(2))
+        );
+        assert_eq!(
+            seed.recurrence.as_ref().unwrap().anchor,
+            "2026-06-08".parse::<PlanDate>().unwrap()
+        );
+        let notify = stored
+            .blocks
+            .iter()
+            .find(|block| block.id.as_str() == "notify")
+            .unwrap();
+        let recurrence = notify.recurrence.as_ref().unwrap();
+        assert_eq!(recurrence.rule.to_string(), "weekly:mon,wed");
+        assert_eq!(recurrence.anchor, "2026-06-01".parse::<PlanDate>().unwrap());
+        assert_eq!(
+            recurrence.end,
+            Some(RecurEnd::Until("2026-06-30".parse::<PlanDate>().unwrap()))
+        );
+        assert_eq!(notify.after, vec!["seed".parse::<BlockId>().unwrap()]);
+        assert_eq!(notify.on_success, vec!["seed".parse::<BlockId>().unwrap()]);
+        assert_eq!(notify.on_failure, vec!["seed".parse::<BlockId>().unwrap()]);
+        assert_eq!(notify.on_missed, vec!["seed".parse::<BlockId>().unwrap()]);
+        assert_eq!(notify.retry.as_ref().unwrap().count, 2);
+        assert_eq!(
+            notify.retry.as_ref().unwrap().backoff,
+            DurationSpec::from_seconds(30).unwrap()
+        );
+        assert_eq!(
+            notify.expect_by,
+            Some(DurationSpec::from_seconds(2 * 60 * 60).unwrap())
+        );
+        assert_eq!(notify.approval, Some(Approval::Approved));
+        assert_eq!(
+            notify.when,
+            Some(WhenCondition::FileExists("/tmp/ready".to_owned()))
+        );
+        assert_eq!(notify.agent.as_deref(), Some("alpha"));
+    }
+
     // ── M3: list_now / list_next / show_agenda ─────────────────────────────────
 
     #[test]
@@ -2562,6 +2840,104 @@ mod tests {
     }
 
     #[test]
+    fn add_block_accepts_orchestration_fields_without_existing_plan() {
+        let (_temp, context) = test_context();
+        let input = req(
+            1,
+            "tools/call",
+            json!({"name": "ccplan_add_block", "arguments": {
+                "date": "2026-06-08",
+                "id": "agent-job",
+                "title": "Agent Job",
+                "start": "12:00",
+                "duration": "20m",
+                "run": ["/usr/bin/echo", "ship"],
+                "approval": "approved",
+                "every": "daily",
+                "retry": {"count": 1, "backoff": "45s"},
+                "expect_by": "1h",
+                "when": "file_changed(/tmp/input.txt)",
+                "agent": "alpha"
+            }}),
+        );
+        let responses = run_serve(&context, input.as_bytes());
+        assert_eq!(responses[0]["result"]["isError"], false);
+        let text = responses[0]["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap();
+        assert!(text.contains("block added"));
+        let stored = context
+            .store
+            .load_plan(&"2026-06-08".parse::<PlanDate>().unwrap())
+            .unwrap()
+            .unwrap();
+        let block = stored.blocks.first().unwrap();
+        assert_eq!(block.id.as_str(), "agent-job");
+        assert_eq!(block.recurrence.as_ref().unwrap().rule, RecurRule::Daily);
+        assert_eq!(block.recurrence.as_ref().unwrap().end, None);
+        assert_eq!(block.approval, Some(Approval::Approved));
+        assert_eq!(block.retry.as_ref().unwrap().count, 1);
+        assert_eq!(
+            block.when,
+            Some(WhenCondition::FileChanged("/tmp/input.txt".to_owned()))
+        );
+        assert_eq!(block.agent.as_deref(), Some("alpha"));
+    }
+
+    #[test]
+    fn add_block_replaces_non_terminal_and_refuses_terminal_block() {
+        let (_temp, context) = test_context();
+        let plan_input = req(
+            1,
+            "tools/call",
+            json!({"name": "ccplan_plan_day", "arguments": {
+                "date": "2026-06-08",
+                "timezone": "Asia/Kolkata",
+                "blocks": [{"id": "replace-me", "title": "Old", "start": "09:00", "end": "09:30"}]
+            }}),
+        );
+        let replace_input = req(
+            2,
+            "tools/call",
+            json!({"name": "ccplan_add_block", "arguments": {
+                "date": "2026-06-08",
+                "id": "replace-me",
+                "title": "New",
+                "start": "10:00",
+                "duration": "30m"
+            }}),
+        );
+        let input = format!("{plan_input}{replace_input}");
+        let responses = run_serve(&context, input.as_bytes());
+        assert_eq!(responses[1]["result"]["isError"], false);
+        let mut stored = context
+            .store
+            .load_plan(&"2026-06-08".parse::<PlanDate>().unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.blocks[0].title, "New");
+        stored.blocks[0].status = Status::Done;
+        context
+            .store
+            .set_plan(&stored, HistoryPolicy::Override)
+            .unwrap();
+
+        let terminal_replace = req(
+            3,
+            "tools/call",
+            json!({"name": "ccplan_add_block", "arguments": {
+                "date": "2026-06-08",
+                "id": "replace-me",
+                "title": "Again",
+                "start": "11:00",
+                "duration": "30m"
+            }}),
+        );
+        let responses = run_serve(&context, terminal_replace.as_bytes());
+        assert_eq!(responses[0]["result"]["isError"], true);
+    }
+
+    #[test]
     fn edit_block_with_start_end_notify_covers_optional_closures() {
         let (_temp, context) = test_context();
         let plan_input = req(
@@ -2631,12 +3007,12 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_contains_all_sixteen_tools() {
+    fn tools_list_contains_all_nineteen_tools() {
         let (_temp, context) = test_context();
         let input = req(1, "tools/list", json!({}));
         let responses = run_serve(&context, input.as_bytes());
         let tools = responses[0]["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 16);
+        assert_eq!(tools.len(), 19);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         for expected in &[
             "ccplan_plan_day",
@@ -2655,8 +3031,170 @@ mod tests {
             "ccplan_list_templates",
             "ccplan_apply_template",
             "ccplan_fire_log",
+            "ccplan_materialize",
+            "ccplan_approve",
+            "ccplan_diff",
         ] {
             assert!(names.contains(expected), "missing tool: {expected}");
+        }
+    }
+
+    #[test]
+    fn materialize_approve_and_diff_tools_dispatch_existing_commands() {
+        let (_temp, context) = test_context();
+        let mut input = req(
+            1,
+            "tools/call",
+            json!({"name": "ccplan_plan_day", "arguments": {
+                "date": "2026-06-08",
+                "timezone": "Asia/Kolkata",
+                "blocks": [{
+                    "id": "runner",
+                    "title": "Runner",
+                    "start": "11:00",
+                    "duration": "15m",
+                    "run": ["/usr/bin/echo", "ok"]
+                }]
+            }}),
+        );
+        input.push_str(&req(
+            2,
+            "tools/call",
+            json!({"name": "ccplan_approve", "arguments": {
+                "date": "2026-06-08",
+                "id": "runner"
+            }}),
+        ));
+        input.push_str(&req(
+            3,
+            "tools/call",
+            json!({"name": "ccplan_diff", "arguments": {"date": "2026-06-08"}}),
+        ));
+        input.push_str(&req(
+            4,
+            "tools/call",
+            json!({"name": "ccplan_materialize", "arguments": {"horizon": 1}}),
+        ));
+        input.push_str(&req(
+            5,
+            "tools/call",
+            json!({"name": "ccplan_materialize", "arguments": {}}),
+        ));
+        let responses = run_serve(&context, input.as_bytes());
+        for response in &responses {
+            assert_eq!(response["result"]["isError"], false, "{response}");
+        }
+        let stored = context
+            .store
+            .load_plan(&"2026-06-08".parse::<PlanDate>().unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.blocks[0].approval, Some(Approval::Approved));
+        let diff_text = responses[2]["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap();
+        assert!(!diff_text.is_empty());
+        let materialize_text = responses[3]["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap();
+        assert!(materialize_text.contains("materialized 2026-06-08"));
+    }
+
+    #[test]
+    fn orchestration_tool_errors_are_reported() {
+        let (_temp, context) = test_context();
+        let too_large = u64::from(u32::MAX) + 1;
+        let mut input = req(
+            1,
+            "tools/call",
+            json!({"name": "ccplan_plan_day", "arguments": {
+                "blocks": [{
+                    "title": "Bad",
+                    "start": "09:00",
+                    "duration": "30m",
+                    "every": "daily",
+                    "until": "2026-06-30",
+                    "count": 2
+                }]
+            }}),
+        );
+        input.push_str(&req(
+            2,
+            "tools/call",
+            json!({"name": "ccplan_plan_day", "arguments": {
+                "blocks": [{
+                    "title": "Bad",
+                    "start": "09:00",
+                    "duration": "30m",
+                    "every": "daily",
+                    "count": too_large
+                }]
+            }}),
+        ));
+        input.push_str(&req(
+            3,
+            "tools/call",
+            json!({"name": "ccplan_plan_day", "arguments": {
+                "blocks": [{
+                    "title": "Bad",
+                    "start": "09:00",
+                    "duration": "30m",
+                    "retry": []
+                }]
+            }}),
+        ));
+        input.push_str(&req(
+            4,
+            "tools/call",
+            json!({"name": "ccplan_plan_day", "arguments": {
+                "blocks": [{
+                    "title": "Bad",
+                    "start": "09:00",
+                    "duration": "30m",
+                    "approval": "bogus"
+                }]
+            }}),
+        ));
+        input.push_str(&req(
+            5,
+            "tools/call",
+            json!({"name": "ccplan_plan_day", "arguments": {
+                "blocks": [{
+                    "title": "Bad",
+                    "start": "09:00",
+                    "duration": "30m",
+                    "when": "file_exists()"
+                }]
+            }}),
+        ));
+        input.push_str(&req(
+            6,
+            "tools/call",
+            json!({"name": "ccplan_materialize", "arguments": {"horizon": "many"}}),
+        ));
+        input.push_str(&req(
+            7,
+            "tools/call",
+            json!({"name": "ccplan_materialize", "arguments": {"horizon": too_large}}),
+        ));
+        input.push_str(&req(
+            8,
+            "tools/call",
+            json!({"name": "ccplan_approve", "arguments": {}}),
+        ));
+        input.push_str(&req(
+            9,
+            "tools/call",
+            json!({"name": "ccplan_approve", "arguments": {"id": ""}}),
+        ));
+        input.push_str(&req(
+            10,
+            "tools/call",
+            json!({"name": "ccplan_approve", "arguments": {"id": "ghost"}}),
+        ));
+        let responses = run_serve(&context, input.as_bytes());
+        for response in responses {
+            assert_eq!(response["result"]["isError"], true, "{response}");
         }
     }
 
@@ -2899,6 +3437,10 @@ mod tests {
         for forbidden in &[
             "fire",
             "ccplan_fire",
+            "serve",
+            "ccplan_serve",
+            "roll",
+            "ccplan_roll",
             "mcp",
             "ccplan_mcp",
             "completions",

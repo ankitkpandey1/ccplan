@@ -24,8 +24,8 @@ use crate::{
     error::{Error, Result},
     lifecycle::{Event, FireDecision, awaiting_approval, decide_fire, reconcile_overdue},
     model::{
-        Approval, Block, BlockId, ClockTime, DurationSpec, Lead, Plan, PlanDate, Run, ScheduleRev,
-        Span, Status, TimeZoneName, WhenCondition,
+        Approval, Block, BlockId, ClockTime, DurationSpec, Lead, Plan, PlanDate, RecurEnd,
+        Recurrence, Retry, Run, ScheduleRev, Span, Status, TimeZoneName, WhenCondition,
     },
     serve::{
         AgentAssignment, AgentEventKey, ConditionState, ServeMemory, decide_agent_assignments,
@@ -106,6 +106,55 @@ pub(crate) fn set_from_str(
     Ok(())
 }
 
+fn recurrence_from_add_args(
+    date: &PlanDate,
+    every: Option<String>,
+    until: Option<PlanDate>,
+    count: Option<u32>,
+) -> Result<Option<Recurrence>> {
+    let Some(every) = every else {
+        if until.is_some() || count.is_some() {
+            return Err(Error::Usage(
+                "`--until` and `--count` require `--every`".to_owned(),
+            ));
+        }
+        return Ok(None);
+    };
+    if until.is_some() && count.is_some() {
+        return Err(Error::Usage(
+            "`--until` and `--count` are mutually exclusive".to_owned(),
+        ));
+    }
+    let rule = crate::recurrence::parse_every(&every).map_err(Error::from)?;
+    let end = until
+        .map(RecurEnd::Until)
+        .or_else(|| count.map(RecurEnd::Count));
+    Ok(Some(Recurrence {
+        rule,
+        anchor: date.clone(),
+        end,
+    }))
+}
+
+fn retry_from_add_arg(raw: Option<String>) -> Result<Option<Retry>> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let (count_raw, backoff_raw) = raw
+        .split_once(':')
+        .ok_or_else(|| Error::Usage("`--retry` must use COUNT:BACKOFF, e.g. `3:30s`".to_owned()))?;
+    if count_raw.is_empty() || backoff_raw.is_empty() {
+        return Err(Error::Usage(
+            "`--retry` must use COUNT:BACKOFF, e.g. `3:30s`".to_owned(),
+        ));
+    }
+    let count = count_raw
+        .parse::<u32>()
+        .map_err(|_| Error::Usage("`--retry` count must be an unsigned integer".to_owned()))?;
+    let backoff = backoff_raw.parse::<DurationSpec>().map_err(Error::from)?;
+    Ok(Some(Retry { count, backoff }))
+}
+
 fn add(args: AddArgs, context: &ContextRefs<'_>) -> Result<()> {
     let date = args.date.unwrap_or_else(|| today(context));
     let id = match args.id {
@@ -113,6 +162,8 @@ fn add(args: AddArgs, context: &ContextRefs<'_>) -> Result<()> {
         None => slug_block_id(&args.title)?,
     };
     let run = run_from(args.run)?;
+    let recurrence = recurrence_from_add_args(&date, args.every, args.until, args.count)?;
+    let retry = retry_from_add_arg(args.retry)?;
     let approval = if run.is_some() {
         Some(crate::model::Approval::Pending)
     } else {
@@ -127,14 +178,14 @@ fn add(args: AddArgs, context: &ContextRefs<'_>) -> Result<()> {
         tags: args.tags,
         status: Status::Pending,
         run,
-        recurrence: None,
+        recurrence,
         origin: None,
-        after: vec![],
+        after: args.after,
         on_success: vec![],
         on_failure: vec![],
         on_missed: vec![],
-        retry: None,
-        expect_by: None,
+        retry,
+        expect_by: args.expect_by,
         approval,
         when: None,
         agent: None,
