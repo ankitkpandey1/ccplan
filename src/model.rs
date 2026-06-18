@@ -103,6 +103,24 @@ impl Plan {
             }
         }
 
+        // Validate dependency cross-references — all ids in after/on_* must exist in this plan.
+        for block in &self.blocks {
+            for ref_id in block
+                .after
+                .iter()
+                .chain(block.on_success.iter())
+                .chain(block.on_failure.iter())
+                .chain(block.on_missed.iter())
+            {
+                if !seen_ids.contains(ref_id) {
+                    return Err(ValidationError::UnknownDependencyRef {
+                        id: block.id.clone(),
+                        ref_id: ref_id.clone(),
+                    });
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -229,6 +247,8 @@ pub enum ValidationError {
     BadWeekday { id: BlockId, token: String },
     #[error("block `{id}` has invalid `when` condition `{value}`")]
     BadWhen { id: BlockId, value: String },
+    #[error("block `{id}` references unknown block `{ref_id}` in dependency list")]
+    UnknownDependencyRef { id: BlockId, ref_id: BlockId },
 }
 
 impl ValidationError {
@@ -244,7 +264,8 @@ impl ValidationError {
             | Self::MissingAnchor { .. }
             | Self::BothCountAndUntil { .. }
             | Self::BadWeekday { .. }
-            | Self::BadWhen { .. } => 2,
+            | Self::BadWhen { .. }
+            | Self::UnknownDependencyRef { .. } => 2,
         }
     }
 }
@@ -1772,6 +1793,36 @@ after      = ["b", "c"]
 on_success = ["d"]
 on_failure = ["e"]
 on_missed  = ["f"]
+
+[[block]]
+id = "b"
+title = "B"
+start = "08:00"
+end = "08:30"
+
+[[block]]
+id = "c"
+title = "C"
+start = "08:30"
+end = "09:00"
+
+[[block]]
+id = "d"
+title = "D"
+start = "09:30"
+end = "10:00"
+
+[[block]]
+id = "e"
+title = "E"
+start = "10:00"
+end = "10:30"
+
+[[block]]
+id = "f"
+title = "F"
+start = "10:30"
+end = "11:00"
 "#;
         let plan = Plan::from_toml(toml).unwrap();
         let b = &plan.blocks[0];
@@ -2355,5 +2406,47 @@ backoff = "bad"
         assert_eq!(Status::Skipped.as_str(), "skipped");
         assert_eq!(Status::Missed.as_str(), "missed");
         assert_eq!(Status::Expired.as_str(), "expired");
+    }
+
+    #[test]
+    fn unknown_dependency_ref_is_a_validation_error() {
+        let err = Plan::from_toml(
+            r#"
+date = "2026-06-08"
+timezone = "UTC"
+
+[[block]]
+id    = "a"
+title = "A"
+start = "09:00"
+end   = "09:30"
+after = ["ghost"]
+"#,
+        );
+        assert!(matches!(
+            err.unwrap_err(),
+            PlanError::Validation(ValidationError::UnknownDependencyRef { .. })
+        ));
+    }
+
+    #[test]
+    fn unknown_on_success_ref_is_a_validation_error() {
+        let err = Plan::from_toml(
+            r#"
+date = "2026-06-08"
+timezone = "UTC"
+
+[[block]]
+id         = "a"
+title      = "A"
+start      = "09:00"
+end        = "09:30"
+on_success = ["nonexistent"]
+"#,
+        );
+        assert!(matches!(
+            err.unwrap_err(),
+            PlanError::Validation(ValidationError::UnknownDependencyRef { .. })
+        ));
     }
 }

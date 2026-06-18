@@ -3220,6 +3220,13 @@ fn arm_after_dependents_skips_block_without_completed_id_in_after() {
                 b.status = Status::Active;
                 b
             },
+            // "standup" must exist so the new cross-ref validation passes.
+            block_with(
+                "standup",
+                "Standup",
+                "09:00",
+                Span::Duration(DurationSpec::from_seconds(900).unwrap()),
+            ),
             {
                 let mut task = block_with(
                     "task",
